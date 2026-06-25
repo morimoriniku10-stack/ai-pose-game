@@ -1,6 +1,6 @@
 {
-  "name": "AI Pose Game",
-  "short_name": "PoseGame",
+  "name": "POSE",
+  "short_name": "ポーズゲーム",
   "description": "カメラでポーズを真似してクリアするAIゲーム",
   "start_url": "/",
   "display": "standalone",
