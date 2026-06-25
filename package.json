@@ -1,0 +1,10 @@
+{
+  "name": "ai-pose-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "カメラでポーズを真似してクリアするAIゲーム",
+  "scripts": {
+    "dev": "npx serve . -p 3000",
+    "preview": "npx serve . -p 3000"
+  }
+}

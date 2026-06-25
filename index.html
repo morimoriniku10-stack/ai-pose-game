@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="カメラでポーズを真似してクリアするAIゲーム" />
+  <meta property="og:title" content="AI ポーズゲーム" />
+  <meta property="og:description" content="カメラでポーズを真似してクリアするAIゲーム" />
+  <meta property="og:type" content="website" />
+
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/icon.svg" />
+
+  <title>AI ポーズゲーム</title>
+
+  <script type="module">
+    import {
+      FaceLandmarker,
+      PoseLandmarker,
+      FilesetResolver,
+      DrawingUtils
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+    window.MP = { FaceLandmarker, PoseLandmarker, FilesetResolver, DrawingUtils };
+    window.dispatchEvent(new Event("mediapipe-ready"));
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg:         #0a0a0f;
+      --surface:    #12121a;
+      --surface2:   #1a1a26;
+      --neon-cyan:  #00f5ff;
+      --neon-pink:  #ff2d78;
+      --neon-lime:  #b8ff2e;
+      --text-hi:    #e8eaf0;
+      --text-lo:    #6b7280;
+      --font-mono:  'Share Tech Mono', 'Courier New', monospace;
+      --radius:     12px;
+      --scan-speed: 3s;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text-hi);
+      font-family: var(--font-mono);
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #camera-wrap {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+    }
+
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+
+    #canvas-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+      pointer-events: none;
+    }
+
+    #camera-wrap::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.12) 2px,
+        rgba(0,0,0,0.12) 4px
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    #ui-layer {
+      position: relative;
+      z-index: 10;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      pointer-events: none;
+    }
+
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px 10px;
+      background: linear-gradient(to bottom, rgba(10,10,15,0.85), transparent);
+    }
+
+    #level-label {
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      color: var(--neon-cyan);
+      text-transform: uppercase;
+    }
+
+    #level-num {
+      font-size: 28px;
+      font-weight: bold;
+      line-height: 1;
+      color: var(--text-hi);
+      text-shadow: 0 0 16px var(--neon-cyan);
+    }
+
+    #score-display {
+      text-align: right;
+    }
+
+    #score-label {
+      font-size: 10px;
+      color: var(--text-lo);
+      letter-spacing: 0.15em;
+    }
+
+    #score-val {
+      font-size: 24px;
+      color: var(--neon-lime);
+      text-shadow: 0 0 12px var(--neon-lime);
+    }
+
+    #mission-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding-top: 12px;
+      gap: 6px;
+    }
+
+    #mission-emoji {
+      font-size: 72px;
+      line-height: 1;
+      filter: drop-shadow(0 0 18px rgba(0,245,255,0.5));
+      animation: floatEmoji 2.4s ease-in-out infinite;
+    }
+
+    @keyframes floatEmoji {
+      0%, 100% { transform: translateY(0); }
+      50%       { transform: translateY(-8px); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #mission-emoji { animation: none; }
+    }
+
+    #mission-title {
+      font-size: 20px;
+      letter-spacing: 0.1em;
+      color: var(--text-hi);
+      text-shadow: 0 0 10px var(--neon-cyan);
+    }
+
+    #mission-hint {
+      font-size: 12px;
+      color: var(--text-lo);
+      letter-spacing: 0.08em;
+    }
+
+    #footer {
+      padding: 12px 20px 24px;
+      background: linear-gradient(to top, rgba(10,10,15,0.9), transparent);
+      width: 100%;
+    }
+
+    #gauge-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-lo);
+      letter-spacing: 0.15em;
+      margin-bottom: 6px;
+    }
+
+    #gauge-track {
+      width: 100%;
+      height: 8px;
+      background: var(--surface2);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid rgba(0,245,255,0.15);
+    }
+
+    #gauge-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--neon-cyan), var(--neon-lime));
+      transition: width 0.15s ease-out;
+      box-shadow: 0 0 8px var(--neon-cyan);
+    }
+
+    #start-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      padding: 32px;
+    }
+
+    .logo-mark {
+      font-size: 72px;
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { filter: drop-shadow(0 0 8px var(--neon-cyan)); }
+      50%       { filter: drop-shadow(0 0 24px var(--neon-cyan)); }
+    }
+
+    .game-title {
+      font-size: 26px;
+      letter-spacing: 0.2em;
+      text-align: center;
+      color: var(--text-hi);
+      text-shadow: 0 0 20px var(--neon-cyan);
+    }
+
+    .game-subtitle {
+      font-size: 12px;
+      color: var(--text-lo);
+      text-align: center;
+      letter-spacing: 0.1em;
+      line-height: 1.8;
+    }
+
+    .level-preview {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .level-chip {
+      background: var(--surface);
+      border: 1px solid rgba(0,245,255,0.2);
+      border-radius: var(--radius);
+      padding: 8px 14px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-hi);
+    }
+
+    .level-chip .chip-num {
+      font-size: 10px;
+      color: var(--neon-cyan);
+    }
+
+    .btn {
+      pointer-events: auto;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font-mono);
+      cursor: pointer;
+      letter-spacing: 0.1em;
+      transition: filter 0.15s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .btn:active { transform: scale(0.96); }
+
+    .btn-primary {
+      background: var(--neon-cyan);
+      color: var(--bg);
+      font-size: 16px;
+      padding: 16px 48px;
+      text-transform: uppercase;
+      box-shadow: 0 0 24px rgba(0,245,255,0.4);
+    }
+
+    .btn-primary:hover { filter: brightness(1.15); }
+
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text-hi);
+      font-size: 14px;
+      padding: 12px 28px;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+
+    .btn-secondary:hover { filter: brightness(1.2); }
+
+    .btn-share {
+      background: linear-gradient(135deg, #1da1f2, #0d8ecf);
+      color: #fff;
+      font-size: 14px;
+      padding: 12px 28px;
+      box-shadow: 0 0 16px rgba(29,161,242,0.4);
+    }
+
+    #clear-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(6px);
+    }
+
+    #clear-modal.visible { display: flex; }
+
+    .modal-card {
+      background: var(--surface);
+      border: 1px solid rgba(0,245,255,0.25);
+      border-radius: 20px;
+      padding: 28px 24px;
+      width: 90%;
+      max-width: 360px;
+      text-align: center;
+      box-shadow: 0 0 40px rgba(0,245,255,0.15);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      animation: slideUp 0.3s ease-out;
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(32px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    #clear-level-tag {
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      color: var(--neon-cyan);
+      text-transform: uppercase;
+    }
+
+    #clear-heading {
+      font-size: 30px;
+      color: var(--neon-lime);
+      text-shadow: 0 0 20px var(--neon-lime);
+    }
+
+    #clear-emoji-display {
+      font-size: 52px;
+    }
+
+    #capture-preview {
+      width: 100%;
+      border-radius: var(--radius);
+      border: 2px solid rgba(0,245,255,0.3);
+      display: none;
+    }
+
+    #ad-slot {
+      width: 300px;
+      height: 100px;
+      background: var(--surface2);
+      border: 1px dashed rgba(255,255,255,0.1);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-lo);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      margin: 0 auto;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    #permission-error {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: var(--bg);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      padding: 32px;
+      text-align: center;
+    }
+
+    #permission-error.visible { display: flex; }
+
+    #permission-error .err-icon { font-size: 48px; }
+    #permission-error .err-title { font-size: 18px; color: var(--neon-pink); }
+    #permission-error .err-msg   { font-size: 13px; color: var(--text-lo); line-height: 1.8; }
+
+    #loading-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      background: rgba(10,10,15,0.9);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    #loading-overlay.visible { display: flex; }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(0,245,255,0.2);
+      border-top-color: var(--neon-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 13px;
+      color: var(--text-lo);
+      letter-spacing: 0.1em;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+
+    @keyframes blink { 50% { opacity: 0.3; } }
+
+    .particle {
+      position: fixed;
+      pointer-events: none;
+      border-radius: 50%;
+      animation: particleFly 0.8s ease-out forwards;
+      z-index: 75;
+    }
+
+    @keyframes particleFly {
+      from { opacity: 1; transform: translate(0,0) scale(1); }
+      to   { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.3); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="start-screen">
+  <div class="logo-mark">🤸</div>
+  <h1 class="game-title">AI POSE GAME</h1>
+  <p class="game-subtitle">
+    カメラに向かってポーズを決めよう！<br>
+    AIがリアルタイムで判定します
+  </p>
+
+  <div class="level-preview" id="level-preview"></div>
+
+  <button class="btn btn-primary" id="start-btn">START GAME</button>
+
+  <p style="font-size:11px;color:var(--text-lo);line-height:1.8;text-align:center">
+    カメラの使用許可が必要です<br>
+    明るい場所でお試しください
+  </p>
+</div>
+
+<div id="app" style="display:none">
+  <div id="camera-wrap">
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="canvas-overlay"></canvas>
+  </div>
+
+  <div id="ui-layer">
+    <header id="header">
+      <div>
+        <div id="level-label">LEVEL</div>
+        <div id="level-num">1</div>
+      </div>
+      <div id="score-display">
+        <div id="score-label">SCORE</div>
+        <div id="score-val">0</div>
+      </div>
+    </header>
+
+    <div id="mission-area">
+      <div id="mission-emoji">😂</div>
+      <div id="mission-title">大爆笑</div>
+      <div id="mission-hint">口角を上げて笑顔に！</div>
+    </div>
+
+    <footer id="footer">
+      <div id="gauge-label">
+        <span>CONFIDENCE</span>
+        <span id="gauge-percent">0%</span>
+      </div>
+      <div id="gauge-track">
+        <div id="gauge-fill"></div>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<div id="clear-modal">
+  <div class="modal-card">
+    <div id="clear-level-tag">LEVEL 1 CLEAR!</div>
+    <div id="clear-heading">🎉 CLEAR!</div>
+    <div id="clear-emoji-display"></div>
+
+    <img id="capture-preview" alt="クリア時のポーズ" />
+
+    <div id="ad-slot">AD SPACE 300×100</div>
+
+    <div class="modal-actions">
+      <button class="btn btn-share" id="share-btn" style="pointer-events:auto">📤 シェア</button>
+      <button class="btn btn-primary" id="next-btn" style="pointer-events:auto">NEXT →</button>
+    </div>
+    <button class="btn btn-secondary" id="retry-btn" style="pointer-events:auto">もう一度</button>
+  </div>
+</div>
+
+<div id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">AI INITIALIZING...</div>
+</div>
+
+<div id="permission-error">
+  <div class="err-icon">📷</div>
+  <div class="err-title">カメラを使用できません</div>
+  <div class="err-msg">
+    ブラウザの設定からカメラのアクセスを許可してください。<br>
+    iOSの場合：設定 → Safari → カメラ → 許可
+  </div>
+  <button class="btn btn-primary" onclick="location.reload()" style="pointer-events:auto">再試行</button>
+</div>
+
+<script>
+const LEVELS = [
+  {
+    id: 1,
+    type: "face",
+    title: "大爆笑",
+    emoji: "😂",
+    hint: "口角を上げて笑顔に！",
+    detector: "detectSmile",
+    clearThreshold: 0.65,
+    holdFrames: 10
+  },
+  {
+    id: 2,
+    type: "face",
+    title: "ウインク",
+    emoji: "😉",
+    hint: "片目だけ閉じてウインク！",
+    detector: "detectWink",
+    clearThreshold: 0.6,
+    holdFrames: 8
+  },
+  {
+    id: 3,
+    type: "pose",
+    title: "両手を上げろ！",
+    emoji: "🙌",
+    hint: "両手首を頭より高く上げよう",
+    detector: "detectHandsUp",
+    clearThreshold: 0.8,
+    holdFrames: 12
+  },
+  {
+    id: 4,
+    type: "pose",
+    title: "マッチョポーズ",
+    emoji: "💪",
+    hint: "両肘を肩より高く上げてポーズ！",
+    detector: "detectMacho",
+    clearThreshold: 0.75,
+    holdFrames: 15
+  },
+  {
+    id: 5,
+    type: "pose",
+    title: "勝利ポーズ",
+    emoji: "🕺",
+    hint: "片腕を上げ、もう片腕は横に伸ばそう",
+    detector: "detectVictory",
+    clearThreshold: 0.7,
+    holdFrames: 12
+  }
+];
+
+const GameState = {
+  currentLevelIndex: 0,
+  score: 0,
+  holdCount: 0,
+  isCleared: false,
+  isRunning: false,
+  animFrameId: null
+};
+
+function currentLevel() {
+  return LEVELS[GameState.currentLevelIndex];
+}
+
+let faceLandmarker = null;
+let poseLandmarker = null;
+
+const $video      = document.getElementById("video");
+const $canvas     = document.getElementById("canvas-overlay");
+const $gaugeFill  = document.getElementById("gauge-fill");
+const $gaugePct   = document.getElementById("gauge-percent");
+const $missionEmoji = document.getElementById("mission-emoji");
+const $missionTitle = document.getElementById("mission-title");
+const $missionHint  = document.getElementById("mission-hint");
+const $levelNum   = document.getElementById("level-num");
+const $scoreVal   = document.getElementById("score-val");
+const ctx         = $canvas.getContext("2d");
+
+async function initMediaPipe() {
+  showLoading(true);
+
+  try {
+    const vision = await window.MP.FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+
+    faceLandmarker = await window.MP.FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      outputFaceBlendshapes: true,
+      runningMode: "VIDEO",
+      numFaces: 1
+    });
+
+    poseLandmarker = await window.MP.PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numPoses: 1
+    });
+
+    console.log("[AI] MediaPipe 初期化完了");
+  } catch (err) {
+    console.error("[AI] MediaPipe 初期化失敗:", err);
+    try {
+      const vision = await window.MP.FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      );
+      faceLandmarker = await window.MP.FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "CPU"
+        },
+        outputFaceBlendshapes: true,
+        runningMode: "VIDEO",
+        numFaces: 1
+      });
+      poseLandmarker = await window.MP.PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task",
+          delegate: "CPU"
+        },
+        runningMode: "VIDEO",
+        numPoses: 1
+      });
+      console.log("[AI] CPU fallback で初期化完了");
+    } catch (fallbackErr) {
+      console.error("[AI] CPU fallbackも失敗:", fallbackErr);
+      alert("AIモデルの読み込みに失敗しました。通信環境を確認して再読み込みしてください。");
+    }
+  }
+
+  showLoading(false);
+}
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    });
+
+    $video.srcObject = stream;
+    await new Promise(resolve => $video.addEventListener("loadedmetadata", resolve, { once: true }));
+    await $video.play();
+
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    console.log("[Camera] カメラ起動完了");
+  } catch (err) {
+    console.error("[Camera] カメラエラー:", err);
+    document.getElementById("permission-error").classList.add("visible");
+  }
+}
+
+function resizeCanvas() {
+  $canvas.width  = window.innerWidth;
+  $canvas.height = window.innerHeight;
+}
+
+let lastTimestamp = -1;
+
+function detectionLoop(timestamp) {
+  if (!GameState.isRunning) return;
+
+  if (timestamp === lastTimestamp) {
+    GameState.animFrameId = requestAnimationFrame(detectionLoop);
+    return;
+  }
+  lastTimestamp = timestamp;
+
+  const level = currentLevel();
+
+  ctx.clearRect(0, 0, $canvas.width, $canvas.height);
+
+  let confidence = 0;
+
+  if (level.type === "face" && faceLandmarker) {
+    const result = faceLandmarker.detectForVideo($video, timestamp);
+    if (result.faceLandmarks && result.faceLandmarks.length > 0) {
+      drawFaceLandmarks(result.faceLandmarks[0]);
+      confidence = DETECTORS[level.detector](result);
+    }
+
+  } else if (level.type === "pose" && poseLandmarker) {
+    const result = poseLandmarker.detectForVideo($video, timestamp);
+    if (result.landmarks && result.landmarks.length > 0) {
+      drawPoseLandmarks(result.landmarks[0]);
+      confidence = DETECTORS[level.detector](result);
+    }
+  }
+
+  updateGauge(confidence);
+
+  if (!GameState.isCleared) {
+    if (confidence >= level.clearThreshold) {
+      GameState.holdCount++;
+      if (GameState.holdCount >= level.holdFrames) {
+        handleClear();
+        return;
+      }
+    } else {
+      GameState.holdCount = Math.max(0, GameState.holdCount - 2);
+    }
+  }
+
+  GameState.animFrameId = requestAnimationFrame(detectionLoop);
+}
+
+function drawFaceLandmarks(landmarks) {
+  ctx.save();
+  ctx.fillStyle = "rgba(0,245,255,0.5)";
+  for (const lm of landmarks) {
+    const x = (1 - lm.x) * $canvas.width;
+    const y = lm.y * $canvas.height;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawPoseLandmarks(landmarks) {
+  if (!landmarks) return;
+
+  const CONNECTIONS = [
+    [11,12],[11,13],[13,15],[12,14],[14,16],
+    [11,23],[12,24],[23,24],
+    [23,25],[25,27],[24,26],[26,28]
+  ];
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,245,255,0.5)";
+  ctx.lineWidth = 2;
+
+  for (const [a, b] of CONNECTIONS) {
+    const lmA = landmarks[a], lmB = landmarks[b];
+    if (!lmA || !lmB) continue;
+    if (lmA.visibility < 0.5 || lmB.visibility < 0.5) continue;
+    const ax = (1 - lmA.x) * $canvas.width;
+    const ay = lmA.y * $canvas.height;
+    const bx = (1 - lmB.x) * $canvas.width;
+    const by = lmB.y * $canvas.height;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "rgba(184,255,46,0.8)";
+  for (const lm of landmarks) {
+    if (lm.visibility < 0.5) continue;
+    const x = (1 - lm.x) * $canvas.width;
+    const y = lm.y * $canvas.height;
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+const DETECTORS = {
+  detectSmile(result) {
+    if (!result.faceBlendshapes || result.faceBlendshapes.length === 0) return 0;
+
+    const shapes = result.faceBlendshapes[0].categories;
+    const get = name => shapes.find(s => s.categoryName === name)?.score ?? 0;
+
+    const smileL = get("mouthSmileLeft");
+    const smileR = get("mouthSmileRight");
+    const squintL = get("eyeSquintLeft");
+    const squintR = get("eyeSquintRight");
+
+    const smileScore  = (smileL + smileR) / 2;
+    const squintScore = (squintL + squintR) / 2;
+
+    return smileScore * 0.7 + squintScore * 0.3;
+  },
+
+  detectWink(result) {
+    if (!result.faceBlendshapes || result.faceBlendshapes.length === 0) return 0;
+
+    const shapes = result.faceBlendshapes[0].categories;
+    const get = name => shapes.find(s => s.categoryName === name)?.score ?? 0;
+
+    const blinkL = get("eyeBlinkLeft");
+    const blinkR = get("eyeBlinkRight");
+
+    const leftWink  = blinkL > 0.5 && blinkR < 0.3;
+    const rightWink = blinkR > 0.5 && blinkL < 0.3;
+
+    if (leftWink || rightWink) {
+      return leftWink ? blinkL : blinkR;
+    }
+    return 0;
+  },
+
+  detectHandsUp(result) {
+    if (!result.landmarks || result.landmarks.length === 0) return 0;
+    const lm = result.landmarks[0];
+
+    const nose      = lm[0];
+    const leftWrist  = lm[15];
+    const rightWrist = lm[16];
+
+    if (!nose || !leftWrist || !rightWrist) return 0;
+
+    if (leftWrist.visibility < 0.5 || rightWrist.visibility < 0.5) return 0;
+
+    const leftUp  = nose.y - leftWrist.y;
+    const rightUp = nose.y - rightWrist.y;
+
+    const leftScore  = Math.min(Math.max(leftUp * 4, 0), 1);
+    const rightScore = Math.min(Math.max(rightUp * 4, 0), 1);
+
+    return (leftScore + rightScore) / 2;
+  },
+
+  detectMacho(result) {
+    if (!result.landmarks || result.landmarks.length === 0) return 0;
+    const lm = result.landmarks[0];
+
+    const lShoulder = lm[11], rShoulder = lm[12];
+    const lElbow    = lm[13], rElbow    = lm[14];
+    const lWrist    = lm[15], rWrist    = lm[16];
+
+    if (!lShoulder || !rShoulder || !lElbow || !rElbow || !lWrist || !rWrist) return 0;
+    if (lElbow.visibility < 0.5 || rElbow.visibility < 0.5) return 0;
+
+    const lElbowUp = lShoulder.y - lElbow.y;
+    const rElbowUp = rShoulder.y - rElbow.y;
+
+    const elbowScore = (
+      Math.min(Math.max(lElbowUp * 5, 0), 1) +
+      Math.min(Math.max(rElbowUp * 5, 0), 1)
+    ) / 2;
+
+    return elbowScore;
+  },
+
+  detectVictory(result) {
+    if (!result.landmarks || result.landmarks.length === 0) return 0;
+    const lm = result.landmarks[0];
+
+    const lShoulder = lm[11], rShoulder = lm[12];
+    const lWrist    = lm[15], rWrist    = lm[16];
+
+    if (!lShoulder || !rShoulder || !lWrist || !rWrist) return 0;
+    if (lWrist.visibility < 0.5 || rWrist.visibility < 0.5) return 0;
+
+    const lArmUp    = lShoulder.y - lWrist.y;
+    const rArmSide  = Math.abs(rWrist.y - rShoulder.y);
+
+    const patternA = Math.min(Math.max(lArmUp * 4, 0), 1) *
+                     Math.min(Math.max((0.15 - rArmSide) * 10, 0), 1);
+
+    const rArmUp    = rShoulder.y - rWrist.y;
+    const lArmSide  = Math.abs(lWrist.y - lShoulder.y);
+
+    const patternB = Math.min(Math.max(rArmUp * 4, 0), 1) *
+                     Math.min(Math.max((0.15 - lArmSide) * 10, 0), 1);
+
+    return Math.max(patternA, patternB);
+  }
+};
+
+function updateGauge(confidence) {
+  const pct = Math.round(confidence * 100);
+  $gaugeFill.style.width = `${pct}%`;
+  $gaugePct.textContent  = `${pct}%`;
+
+  if (pct >= 90) {
+    $gaugeFill.style.background = "linear-gradient(90deg, var(--neon-lime), #fff)";
+  } else {
+    $gaugeFill.style.background = "linear-gradient(90deg, var(--neon-cyan), var(--neon-lime))";
+  }
+}
+
+function updateLevelUI(level) {
+  $levelNum.textContent      = level.id;
+  $missionEmoji.textContent  = level.emoji;
+  $missionTitle.textContent  = level.title;
+  $missionHint.textContent   = level.hint;
+  document.getElementById("clear-level-tag").textContent = `LEVEL ${level.id} CLEAR!`;
+  document.getElementById("clear-emoji-display").textContent = level.emoji;
+  updateGauge(0);
+  GameState.holdCount = 0;
+  GameState.isCleared = false;
+}
+
+function updateScore() {
+  $scoreVal.textContent = GameState.score;
+}
+
+async function handleClear() {
+  GameState.isCleared = true;
+  GameState.isRunning  = false;
+  cancelAnimationFrame(GameState.animFrameId);
+
+  GameState.score += 100;
+  updateScore();
+
+  const captureCanvas = document.createElement("canvas");
+  captureCanvas.width  = $video.videoWidth;
+  captureCanvas.height = $video.videoHeight;
+  const captureCtx = captureCanvas.getContext("2d");
+  captureCtx.translate(captureCanvas.width, 0);
+  captureCtx.scale(-1, 1);
+  captureCtx.drawImage($video, 0, 0);
+
+  const captureDataUrl = captureCanvas.toDataURL("image/jpeg", 0.85);
+
+  const $preview = document.getElementById("capture-preview");
+  $preview.src   = captureDataUrl;
+  $preview.style.display = "block";
+
+  spawnParticles();
+
+  document.getElementById("clear-modal").classList.add("visible");
+
+  const $nextBtn = document.getElementById("next-btn");
+  if (GameState.currentLevelIndex >= LEVELS.length - 1) {
+    $nextBtn.textContent = "🏆 ALL CLEAR!";
+  } else {
+    $nextBtn.textContent = "NEXT →";
+  }
+
+  window._captureDataUrl = captureDataUrl;
+}
+
+function spawnParticles() {
+  const colors = ["var(--neon-cyan)", "var(--neon-lime)", "var(--neon-pink)", "#fff"];
+  const count  = 20;
+
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "particle";
+
+    const size  = Math.random() * 10 + 5;
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const dx    = (Math.random() - 0.5) * 200;
+    const dy    = (Math.random() - 0.8) * 200;
+    const delay = Math.random() * 0.3;
+
+    el.style.cssText = `
+      width:${size}px; height:${size}px;
+      background:${color};
+      left:${Math.random() * 100}vw;
+      top:${Math.random() * 100}vh;
+      --dx:${dx}px; --dy:${dy}px;
+      animation-delay:${delay}s;
+    `;
+
+    document.body.appendChild(el);
+    el.addEventListener("animationend", () => el.remove());
+  }
+}
+
+async function shareResult() {
+  const level = currentLevel();
+  const shareText = `🎮 AI Pose Game\nLEVEL ${level.id}「${level.title}」${level.emoji}クリア！\nスコア: ${GameState.score}点\n#AIPoseGame #AIゲーム`;
+
+  try {
+    if (navigator.share && navigator.canShare) {
+      const response = await fetch(window._captureDataUrl);
+      const blob     = await response.blob();
+      const file     = new File([blob], "pose-game-clear.jpg", { type: "image/jpeg" });
+
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ text: shareText, files: [file] });
+        return;
+      }
+    }
+
+    if (navigator.share) {
+      await navigator.share({ text: shareText });
+      return;
+    }
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    console.warn("[Share] Web Share API 失敗:", err);
+  }
+
+  try {
+    await navigator.clipboard.writeText(shareText);
+    alert("テキストをコピーしました！SNSに貼り付けてシェアしてください 📋");
+  } catch (clipErr) {
+    const ta = document.createElement("textarea");
+    ta.value = shareText;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    alert("テキストをコピーしました！SNSに貼り付けてシェアしてください 📋");
+  }
+}
+
+function startLevel(index) {
+  GameState.currentLevelIndex = index;
+  GameState.holdCount         = 0;
+  GameState.isCleared         = false;
+  GameState.isRunning         = true;
+
+  updateLevelUI(currentLevel());
+
+  GameState.animFrameId = requestAnimationFrame(detectionLoop);
+}
+
+function goNextLevel() {
+  document.getElementById("clear-modal").classList.remove("visible");
+
+  if (GameState.currentLevelIndex < LEVELS.length - 1) {
+    startLevel(GameState.currentLevelIndex + 1);
+  } else {
+    showAllClear();
+  }
+}
+
+function retryLevel() {
+  document.getElementById("clear-modal").classList.remove("visible");
+  startLevel(GameState.currentLevelIndex);
+}
+
+function showAllClear() {
+  document.getElementById("clear-modal").classList.remove("visible");
+  document.getElementById("app").style.display = "none";
+
+  const screen = document.getElementById("start-screen");
+  screen.style.display = "flex";
+  screen.querySelector(".logo-mark").textContent = "🏆";
+  screen.querySelector(".game-title").textContent = "ALL CLEAR!";
+  screen.querySelector(".game-subtitle").textContent =
+    `最終スコア: ${GameState.score}点\nすべてのポーズをクリアしました！`;
+  document.getElementById("start-btn").textContent = "もう一度遊ぶ";
+
+  GameState.score = 0;
+  updateScore();
+}
+
+function showLoading(visible) {
+  const $overlay = document.getElementById("loading-overlay");
+  if (visible) {
+    $overlay.classList.add("visible");
+  } else {
+    $overlay.classList.remove("visible");
+  }
+}
+
+function buildStartScreen() {
+  const $preview = document.getElementById("level-preview");
+  LEVELS.forEach(level => {
+    const chip = document.createElement("div");
+    chip.className = "level-chip";
+    chip.innerHTML = `<span class="chip-num">LV${level.id}</span>${level.emoji} ${level.title}`;
+    $preview.appendChild(chip);
+  });
+}
+
+document.getElementById("start-btn").addEventListener("click", async () => {
+  document.getElementById("start-screen").style.display = "none";
+  document.getElementById("app").style.display = "flex";
+
+  if (!faceLandmarker || !poseLandmarker) {
+    await initMediaPipe();
+  }
+
+  await startCamera();
+
+  startLevel(0);
+});
+
+document.getElementById("next-btn").addEventListener("click", goNextLevel);
+document.getElementById("retry-btn").addEventListener("click", retryLevel);
+document.getElementById("share-btn").addEventListener("click", shareResult);
+
+function init() {
+  buildStartScreen();
+  console.log("[App] 初期化完了 — STARTボタン待機中");
+}
+
+if (window.MP) {
+  init();
+} else {
+  window.addEventListener("mediapipe-ready", init, { once: true });
+}
+</script>
+</body>
+</html>
