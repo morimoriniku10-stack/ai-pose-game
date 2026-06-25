@@ -346,6 +346,31 @@
       transform: none;
     }
 
+    #compat-warning {
+      display: none;
+      width: 100%;
+      max-width: 340px;
+      background: #fff3f3;
+      border: 1px solid #ffb4b4;
+      border-radius: 16px;
+      padding: 14px 16px;
+      font-family: 'M PLUS Rounded 1c', system-ui, sans-serif;
+      font-size: 13px;
+      color: #8b3a3a;
+      line-height: 1.7;
+      text-align: left;
+    }
+
+    #compat-warning.visible {
+      display: block;
+    }
+
+    #compat-warning strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
     .btn {
       pointer-events: auto;
       border: none;
@@ -547,9 +572,11 @@
       AIがリアルタイムで判定します
     </p>
     <button class="btn btn-primary" id="start-btn">はじめる</button>
+    <div id="compat-warning" role="alert"></div>
     <p class="start-note">
       カメラの許可が必要です<br>
-      明るい場所で遊んでね
+      明るい場所で遊んでね<br>
+      <span style="font-size:10px;color:#ccc">iOS 15+ / Android 9+ 推奨</span>
     </p>
   </div>
 </div>
@@ -696,10 +723,83 @@ let visionTask = null;
 let faceInitPromise = null;
 let poseInitPromise = null;
 
-const FACE_MODEL =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
-const POSE_MODEL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task";
+const FACE_MODELS = [
+  "/models/face_landmarker.task",
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+];
+const POSE_MODELS = [
+  "/models/pose_landmarker_lite.task",
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task"
+];
+
+function isInAppBrowser() {
+  const ua = navigator.userAgent;
+  return /Line\//i.test(ua)
+    || /Instagram/i.test(ua)
+    || /FBAN|FBAV/i.test(ua)
+    || /Twitter/i.test(ua)
+    || /MicroMessenger/i.test(ua);
+}
+
+function checkCompatibility() {
+  const issues = [];
+
+  if (!window.isSecureContext) {
+    issues.push({
+      blocking: true,
+      title: "HTTPS接続が必要です",
+      message: "カメラを使うには安全な接続（https://）で開いてください。"
+    });
+  }
+
+  if (typeof WebAssembly !== "object") {
+    issues.push({
+      blocking: true,
+      title: "ブラウザ非対応",
+      message: "お使いのブラウザはAI機能に対応していません。Safari または Chrome の最新版をお試しください。"
+    });
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    issues.push({
+      blocking: true,
+      title: "カメラ非対応",
+      message: "このブラウザではカメラを利用できません。"
+    });
+  }
+
+  if (isInAppBrowser()) {
+    issues.push({
+      blocking: true,
+      title: "アプリ内ブラウザでは動作しません",
+      message: "LINE・Instagram 等のアプリ内ブラウザではカメラやAIが使えないことがあります。Safari または Chrome で直接開いてください。"
+    });
+  }
+
+  return {
+    ok: !issues.some(i => i.blocking),
+    issues
+  };
+}
+
+function showCompatibilityResult(result) {
+  const $warn = document.getElementById("compat-warning");
+  const $btn = document.getElementById("start-btn");
+
+  if (result.ok) {
+    $warn.classList.remove("visible");
+    $warn.innerHTML = "";
+    $btn.disabled = false;
+    return;
+  }
+
+  const blocking = result.issues.filter(i => i.blocking);
+  $warn.innerHTML = blocking.map(i =>
+    `<strong>${i.title}</strong>${i.message}`
+  ).join("<br><br>");
+  $warn.classList.add("visible");
+  $btn.disabled = true;
+}
 
 function isIOS() {
   return /iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -710,8 +810,7 @@ function isMobile() {
 }
 
 function getDelegates() {
-  if (isIOS()) return ["CPU"];
-  if (/Android/i.test(navigator.userAgent)) return ["CPU", "GPU"];
+  if (isMobile()) return ["CPU"];
   return ["GPU", "CPU"];
 }
 
@@ -764,6 +863,7 @@ async function getVisionTask() {
       return visionTask;
     } catch (err) {
       lastError = err;
+      visionTask = null;
       console.warn("[AI] WASM 失敗:", base, err);
     }
   }
@@ -771,21 +871,53 @@ async function getVisionTask() {
   throw lastError || new Error("WASM の読み込みに失敗しました");
 }
 
-async function createFaceLandmarker(vision, delegate) {
+async function createFaceLandmarker(vision, delegate, modelPath) {
   return window.MP.FaceLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: FACE_MODEL, delegate },
+    baseOptions: { modelAssetPath: modelPath, delegate },
     outputFaceBlendshapes: true,
     runningMode: "VIDEO",
     numFaces: 1
   });
 }
 
-async function createPoseLandmarker(vision, delegate) {
+async function createPoseLandmarker(vision, delegate, modelPath) {
   return window.MP.PoseLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: POSE_MODEL, delegate },
+    baseOptions: { modelAssetPath: modelPath, delegate },
     runningMode: "VIDEO",
     numPoses: 1
   });
+}
+
+async function loadFaceLandmarker(vision, delegate) {
+  let lastError = null;
+  for (const modelPath of FACE_MODELS) {
+    try {
+      return await withRetry(
+        `FaceLandmarker/${delegate}/${modelPath}`,
+        () => createFaceLandmarker(vision, delegate, modelPath)
+      );
+    } catch (err) {
+      lastError = err;
+      console.warn("[AI] 顔モデル失敗:", modelPath, err);
+    }
+  }
+  throw lastError || new Error("顔認識モデルの読み込みに失敗しました");
+}
+
+async function loadPoseLandmarker(vision, delegate) {
+  let lastError = null;
+  for (const modelPath of POSE_MODELS) {
+    try {
+      return await withRetry(
+        `PoseLandmarker/${delegate}/${modelPath}`,
+        () => createPoseLandmarker(vision, delegate, modelPath)
+      );
+    } catch (err) {
+      lastError = err;
+      console.warn("[AI] ポーズモデル失敗:", modelPath, err);
+    }
+  }
+  throw lastError || new Error("ポーズモデルの読み込みに失敗しました");
 }
 
 async function ensureFaceLandmarker() {
@@ -798,10 +930,7 @@ async function ensureFaceLandmarker() {
       for (const delegate of getDelegates()) {
         try {
           setLoadingText(`顔認識モデル読込中 (${delegate})...`);
-          faceLandmarker = await withRetry(
-            `FaceLandmarker/${delegate}`,
-            () => createFaceLandmarker(vision, delegate)
-          );
+          faceLandmarker = await loadFaceLandmarker(vision, delegate);
           console.log(`[AI] FaceLandmarker 完了 (${delegate})`);
           return true;
         } catch (err) {
@@ -829,10 +958,7 @@ async function ensurePoseLandmarker() {
       for (const delegate of getDelegates()) {
         try {
           setLoadingText(`ポーズモデル読込中 (${delegate})...`);
-          poseLandmarker = await withRetry(
-            `PoseLandmarker/${delegate}`,
-            () => createPoseLandmarker(vision, delegate)
-          );
+          poseLandmarker = await loadPoseLandmarker(vision, delegate);
           console.log(`[AI] PoseLandmarker 完了 (${delegate})`);
           return true;
         } catch (err) {
@@ -859,14 +985,14 @@ async function ensureDetectorForLevel(level) {
     return await ensurePoseLandmarker();
   } catch (err) {
     console.error("[AI] モデル読込失敗:", err);
-    alert(
-      "AIモデルの読み込みに失敗しました。\n\n" +
-      "【iPhoneの場合】\n" +
-      "・Wi-Fiで再試行してください\n" +
-      "・Safariのタブを閉じて開き直す\n" +
-      "・低電力モードをオフにする\n\n" +
-      "改善しない場合はページを再読み込みしてください。"
-    );
+    showCompatibilityResult({
+      ok: false,
+      issues: [{
+        blocking: true,
+        title: "AIモデルの読み込みに失敗しました",
+        message: "Wi-Fiで接続し、ページを再読み込みしてお試しください。低電力モードをオフにすると改善することがあります。"
+      }]
+    });
     return false;
   } finally {
     showLoading(false);
@@ -1370,6 +1496,7 @@ document.getElementById("retry-btn").addEventListener("click", retryLevel);
 document.getElementById("share-btn").addEventListener("click", shareResult);
 
 function init() {
+  showCompatibilityResult(checkCompatibility());
   preloadMediaPipeLibrary();
   console.log("[App] 初期化完了 — STARTボタン待機中");
 }
