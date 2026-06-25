@@ -18,21 +18,34 @@
   <title>POSE</title>
 
   <script type="module">
-    const MP_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-    try {
-      const {
-        FaceLandmarker,
-        PoseLandmarker,
-        FilesetResolver,
-        DrawingUtils
-      } = await import(`${MP_CDN}/vision_bundle.mjs`);
+    const MP_CDNS = [
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+      "https://unpkg.com/@mediapipe/tasks-vision@0.10.14"
+    ];
 
-      window.MP = { FaceLandmarker, PoseLandmarker, FilesetResolver, DrawingUtils, CDN: MP_CDN };
-      window.dispatchEvent(new Event("mediapipe-ready"));
-    } catch (err) {
-      console.error("[AI] MediaPipe CDN 読み込み失敗:", err);
-      window.dispatchEvent(new CustomEvent("mediapipe-error", { detail: err }));
+    async function loadMediaPipeLibrary() {
+      let lastError = null;
+      for (const cdn of MP_CDNS) {
+        try {
+          const {
+            FaceLandmarker,
+            PoseLandmarker,
+            FilesetResolver,
+            DrawingUtils
+          } = await import(`${cdn}/vision_bundle.mjs`);
+
+          window.MP = { FaceLandmarker, PoseLandmarker, FilesetResolver, DrawingUtils, CDN: cdn };
+          window.dispatchEvent(new Event("mediapipe-ready"));
+          return;
+        } catch (err) {
+          lastError = err;
+          console.warn("[AI] CDN 失敗:", cdn, err);
+        }
+      }
+      window.dispatchEvent(new CustomEvent("mediapipe-error", { detail: lastError }));
     }
+
+    loadMediaPipeLibrary();
   </script>
 
   <style>
@@ -679,17 +692,34 @@ function currentLevel() {
 
 let faceLandmarker = null;
 let poseLandmarker = null;
-let mediaPipeInitPromise = null;
+let visionTask = null;
+let faceInitPromise = null;
+let poseInitPromise = null;
 
-function prefersCpuDelegate() {
-  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const FACE_MODEL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const POSE_MODEL =
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task";
+
+function isIOS() {
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-function waitForMediaPipe(timeoutMs = 45000) {
+function isMobile() {
+  return isIOS() || /Android/i.test(navigator.userAgent);
+}
+
+function getDelegates() {
+  if (isIOS()) return ["CPU"];
+  if (/Android/i.test(navigator.userAgent)) return ["CPU", "GPU"];
+  return ["GPU", "CPU"];
+}
+
+function waitForMediaPipe(timeoutMs = 60000) {
   if (window.MP) return Promise.resolve(window.MP);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error("MediaPipe ライブラリの読み込みがタイムアウトしました"));
+      reject(new Error("AIライブラリの読み込みがタイムアウトしました"));
     }, timeoutMs);
 
     window.addEventListener("mediapipe-ready", () => {
@@ -699,88 +729,149 @@ function waitForMediaPipe(timeoutMs = 45000) {
 
     window.addEventListener("mediapipe-error", (e) => {
       clearTimeout(timer);
-      reject(e.detail || new Error("MediaPipe ライブラリの読み込みに失敗しました"));
+      reject(e.detail || new Error("AIライブラリの読み込みに失敗しました"));
     }, { once: true });
   });
 }
 
-async function createLandmarkers(vision, delegate) {
-  const face = await window.MP.FaceLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-      delegate
-    },
+async function withRetry(label, fn, retries = 3) {
+  let lastError = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      console.warn(`[AI] ${label} 失敗 (${i + 1}/${retries}):`, err);
+      if (i < retries - 1) {
+        await new Promise(r => setTimeout(r, 1200 * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function getVisionTask() {
+  if (visionTask) return visionTask;
+  await waitForMediaPipe(isMobile() ? 90000 : 60000);
+
+  const wasmBases = ["/wasm", `${window.MP.CDN}/wasm`];
+  let lastError = null;
+
+  for (const base of wasmBases) {
+    try {
+      visionTask = await window.MP.FilesetResolver.forVisionTasks(base);
+      console.log("[AI] WASM 読込成功:", base);
+      return visionTask;
+    } catch (err) {
+      lastError = err;
+      console.warn("[AI] WASM 失敗:", base, err);
+    }
+  }
+
+  throw lastError || new Error("WASM の読み込みに失敗しました");
+}
+
+async function createFaceLandmarker(vision, delegate) {
+  return window.MP.FaceLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: FACE_MODEL, delegate },
     outputFaceBlendshapes: true,
     runningMode: "VIDEO",
     numFaces: 1
   });
+}
 
-  const pose = await window.MP.PoseLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task",
-      delegate
-    },
+async function createPoseLandmarker(vision, delegate) {
+  return window.MP.PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: POSE_MODEL, delegate },
     runningMode: "VIDEO",
     numPoses: 1
   });
-
-  return { face, pose };
 }
 
-async function initMediaPipe() {
-  if (faceLandmarker && poseLandmarker) return true;
-  if (mediaPipeInitPromise) return mediaPipeInitPromise;
+async function ensureFaceLandmarker() {
+  if (faceLandmarker) return true;
+  if (faceInitPromise) return faceInitPromise;
 
-  mediaPipeInitPromise = (async () => {
-    showLoading(true);
-    setLoadingText("AI INITIALIZING...");
-
+  faceInitPromise = (async () => {
     try {
-      await waitForMediaPipe();
-      const wasmBase = `${window.MP.CDN}/wasm`;
-      const vision = await window.MP.FilesetResolver.forVisionTasks(wasmBase);
-
-      const delegates = prefersCpuDelegate()
-        ? ["CPU", "GPU"]
-        : ["GPU", "CPU"];
-
-      let lastError = null;
-
-      for (const delegate of delegates) {
+      const vision = await getVisionTask();
+      for (const delegate of getDelegates()) {
         try {
-          setLoadingText(`AI モデル読込中 (${delegate})...`);
-          const { face, pose } = await createLandmarkers(vision, delegate);
-          faceLandmarker = face;
-          poseLandmarker = pose;
-          console.log(`[AI] MediaPipe 初期化完了 (${delegate})`);
+          setLoadingText(`顔認識モデル読込中 (${delegate})...`);
+          faceLandmarker = await withRetry(
+            `FaceLandmarker/${delegate}`,
+            () => createFaceLandmarker(vision, delegate)
+          );
+          console.log(`[AI] FaceLandmarker 完了 (${delegate})`);
           return true;
         } catch (err) {
-          lastError = err;
-          console.warn(`[AI] ${delegate} 初期化失敗:`, err);
+          console.warn(`[AI] FaceLandmarker ${delegate} 失敗:`, err);
           faceLandmarker = null;
-          poseLandmarker = null;
         }
       }
-
-      throw lastError || new Error("MediaPipe 初期化に失敗しました");
+      throw new Error("顔認識モデルの読み込みに失敗しました");
     } catch (err) {
-      console.error("[AI] MediaPipe 初期化失敗:", err);
-      mediaPipeInitPromise = null;
-      alert(
-        "AIモデルの読み込みに失敗しました。\n\n" +
-        "・Wi-Fiなど通信の良い場所で再試行\n" +
-        "・ページを再読み込み\n" +
-        "・Safari/Chrome の最新版を使用\n\n" +
-        "繰り返す場合はしばらく待ってからお試しください。"
-      );
-      return false;
-    } finally {
-      showLoading(false);
-      setLoadingText("AI INITIALIZING...");
+      faceInitPromise = null;
+      throw err;
     }
   })();
 
-  return mediaPipeInitPromise;
+  return faceInitPromise;
+}
+
+async function ensurePoseLandmarker() {
+  if (poseLandmarker) return true;
+  if (poseInitPromise) return poseInitPromise;
+
+  poseInitPromise = (async () => {
+    try {
+      const vision = await getVisionTask();
+      for (const delegate of getDelegates()) {
+        try {
+          setLoadingText(`ポーズモデル読込中 (${delegate})...`);
+          poseLandmarker = await withRetry(
+            `PoseLandmarker/${delegate}`,
+            () => createPoseLandmarker(vision, delegate)
+          );
+          console.log(`[AI] PoseLandmarker 完了 (${delegate})`);
+          return true;
+        } catch (err) {
+          console.warn(`[AI] PoseLandmarker ${delegate} 失敗:`, err);
+          poseLandmarker = null;
+        }
+      }
+      throw new Error("ポーズモデルの読み込みに失敗しました");
+    } catch (err) {
+      poseInitPromise = null;
+      throw err;
+    }
+  })();
+
+  return poseInitPromise;
+}
+
+async function ensureDetectorForLevel(level) {
+  showLoading(true);
+  try {
+    if (level.type === "face") {
+      return await ensureFaceLandmarker();
+    }
+    return await ensurePoseLandmarker();
+  } catch (err) {
+    console.error("[AI] モデル読込失敗:", err);
+    alert(
+      "AIモデルの読み込みに失敗しました。\n\n" +
+      "【iPhoneの場合】\n" +
+      "・Wi-Fiで再試行してください\n" +
+      "・Safariのタブを閉じて開き直す\n" +
+      "・低電力モードをオフにする\n\n" +
+      "改善しない場合はページを再読み込みしてください。"
+    );
+    return false;
+  } finally {
+    showLoading(false);
+    setLoadingText("AI INITIALIZING...");
+  }
 }
 
 function setLoadingText(text) {
@@ -788,8 +879,8 @@ function setLoadingText(text) {
   if (el) el.textContent = text;
 }
 
-function preloadMediaPipe() {
-  initMediaPipe().catch(() => {});
+function preloadMediaPipeLibrary() {
+  waitForMediaPipe().catch(() => {});
 }
 
 const $video      = document.getElementById("video");
@@ -808,8 +899,8 @@ async function startCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "user",
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: isMobile() ? 640 : 1280 },
+        height: { ideal: isMobile() ? 480 : 720 }
       },
       audio: false
     });
@@ -1172,30 +1263,41 @@ async function shareResult() {
   }
 }
 
-function startLevel(index) {
+async function startLevel(index) {
   GameState.currentLevelIndex = index;
   GameState.holdCount         = 0;
   GameState.isCleared         = false;
-  GameState.isRunning         = true;
+  GameState.isRunning         = false;
 
   updateLevelUI(currentLevel());
 
+  const ready = await ensureDetectorForLevel(currentLevel());
+  if (!ready) return false;
+
+  GameState.isRunning = true;
   GameState.animFrameId = requestAnimationFrame(detectionLoop);
+  return true;
 }
 
-function goNextLevel() {
+async function goNextLevel() {
   document.getElementById("clear-modal").classList.remove("visible");
 
   if (GameState.currentLevelIndex < LEVELS.length - 1) {
-    startLevel(GameState.currentLevelIndex + 1);
+    const started = await startLevel(GameState.currentLevelIndex + 1);
+    if (!started) {
+      document.getElementById("clear-modal").classList.add("visible");
+    }
   } else {
     showAllClear();
   }
 }
 
-function retryLevel() {
+async function retryLevel() {
   document.getElementById("clear-modal").classList.remove("visible");
-  startLevel(GameState.currentLevelIndex);
+  const started = await startLevel(GameState.currentLevelIndex);
+  if (!started) {
+    document.getElementById("clear-modal").classList.add("visible");
+  }
 }
 
 function resetStartScreen() {
@@ -1250,17 +1352,16 @@ document.getElementById("start-btn").addEventListener("click", async () => {
   document.getElementById("start-screen").style.display = "none";
   document.getElementById("app").style.display = "flex";
 
-  const aiReady = await initMediaPipe();
-  if (!aiReady) {
+  await startCamera();
+
+  const started = await startLevel(0);
+  if (!started) {
     document.getElementById("start-screen").style.display = "flex";
     document.getElementById("app").style.display = "none";
     $startBtn.disabled = false;
     return;
   }
 
-  await startCamera();
-
-  startLevel(0);
   $startBtn.disabled = false;
 });
 
@@ -1269,7 +1370,7 @@ document.getElementById("retry-btn").addEventListener("click", retryLevel);
 document.getElementById("share-btn").addEventListener("click", shareResult);
 
 function init() {
-  preloadMediaPipe();
+  preloadMediaPipeLibrary();
   console.log("[App] 初期化完了 — STARTボタン待機中");
 }
 
