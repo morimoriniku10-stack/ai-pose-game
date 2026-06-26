@@ -109,6 +109,32 @@
       pointer-events: none;
     }
 
+    #guide-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      transform: scaleX(-1);
+    }
+
+    #guide-overlay.guide-active { display: block; }
+
+    .guide-duo-badge {
+      position: absolute;
+      top: 12%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255,45,120,0.85);
+      color: #fff;
+      font-family: 'M PLUS Rounded 1c', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      padding: 6px 14px;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+      box-shadow: 0 0 16px rgba(255,45,120,0.5);
+    }
+
     #camera-wrap::after {
       content: '';
       position: absolute;
@@ -688,6 +714,7 @@
   <div id="camera-wrap">
     <video id="video" playsinline autoplay muted></video>
     <canvas id="canvas-overlay"></canvas>
+    <div id="guide-overlay" class="guide-overlay" aria-hidden="true"></div>
   </div>
 
   <div id="ui-layer">
@@ -773,60 +800,9 @@
   <button class="btn btn-primary" onclick="location.reload()" style="pointer-events:auto">再試行</button>
 </div>
 
+<script src="/levels.js"></script>
+<script src="/ar-fx.js"></script>
 <script>
-const LEVELS = [
-  {
-    id: 1,
-    type: "face",
-    title: "大爆笑",
-    emoji: "😂",
-    hint: "口角を上げて笑顔に！",
-    detector: "detectSmile",
-    clearThreshold: 0.78,
-    holdFrames: 15
-  },
-  {
-    id: 2,
-    type: "face",
-    title: "ウインク",
-    emoji: "😉",
-    hint: "片目だけしっかり閉じてウインク！",
-    detector: "detectWink",
-    clearThreshold: 0.72,
-    holdFrames: 12
-  },
-  {
-    id: 3,
-    type: "pose",
-    title: "両手を上げろ！",
-    emoji: "🙌",
-    hint: "両手首を頭より高く上げよう",
-    detector: "detectHandsUp",
-    clearThreshold: 0.88,
-    holdFrames: 18
-  },
-  {
-    id: 4,
-    type: "pose",
-    title: "マッチョポーズ",
-    emoji: "💪",
-    hint: "両肘を肩より高く上げてポーズ！",
-    detector: "detectMacho",
-    clearThreshold: 0.85,
-    holdFrames: 20
-  },
-  {
-    id: 5,
-    type: "pose",
-    title: "勝利ポーズ",
-    emoji: "🕺",
-    hint: "片腕を上げ、もう片腕は横に伸ばそう",
-    detector: "detectVictory",
-    clearThreshold: 0.82,
-    holdFrames: 18
-  }
-];
-
 const GameState = {
   currentLevelIndex: 0,
   score: 0,
@@ -991,7 +967,7 @@ async function createFaceLandmarker(vision, delegate, modelPath) {
     baseOptions: { modelAssetPath: modelPath, delegate },
     outputFaceBlendshapes: true,
     runningMode: "VIDEO",
-    numFaces: 1
+    numFaces: 2
   });
 }
 
@@ -999,7 +975,7 @@ async function createPoseLandmarker(vision, delegate, modelPath) {
   return window.MP.PoseLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: modelPath, delegate },
     runningMode: "VIDEO",
-    numPoses: 1
+    numPoses: 2
   });
 }
 
@@ -1094,10 +1070,11 @@ async function ensurePoseLandmarker() {
 async function ensureDetectorForLevel(level) {
   showLoading(true);
   try {
-    if (level.type === "face") {
-      return await ensureFaceLandmarker();
-    }
-    return await ensurePoseLandmarker();
+    const needsFace = level.type === "face" || level.type === "both";
+    const needsPose = level.type === "pose" || level.type === "both";
+    if (needsFace && !(await ensureFaceLandmarker())) return false;
+    if (needsPose && !(await ensurePoseLandmarker())) return false;
+    return true;
   } catch (err) {
     console.error("[AI] モデル読込失敗:", err);
     showCompatibilityResult({
@@ -1180,6 +1157,31 @@ async function resumeCamera() {
   }
 }
 
+function releaseFaceLandmarker() {
+  if (faceLandmarker) {
+    try { faceLandmarker.close(); } catch (e) { /* ignore */ }
+    faceLandmarker = null;
+    faceInitPromise = null;
+  }
+}
+
+function releasePoseLandmarker() {
+  if (poseLandmarker) {
+    try { poseLandmarker.close(); } catch (e) { /* ignore */ }
+    poseLandmarker = null;
+    poseInitPromise = null;
+  }
+}
+
+async function restartCameraStream() {
+  if ($video.srcObject) {
+    $video.srcObject.getTracks().forEach(t => t.stop());
+    $video.srcObject = null;
+  }
+  lastTimestamp = -1;
+  await startCamera();
+}
+
 function resetClearModalPreview() {
   const $preview = document.getElementById("capture-preview");
   $preview.removeAttribute("src");
@@ -1198,92 +1200,20 @@ function closePhotoLightbox() {
   document.getElementById("photo-lightbox").classList.remove("visible");
 }
 
-function drawGuideFrame(level) {
-  const w = $canvas.width;
-  const h = $canvas.height;
-  const cx = w / 2;
-
-  ctx.save();
-  ctx.setLineDash([10, 8]);
-  ctx.lineWidth = 3;
-
-  if (level.type === "face") {
-    const cy = h * 0.36;
-    ctx.strokeStyle = "rgba(184,255,46,0.75)";
-    ctx.fillStyle = "rgba(184,255,46,0.08)";
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, w * 0.26, h * 0.19, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(184,255,46,0.95)";
-    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("顔を枠に合わせて！", cx, cy + h * 0.22);
-  } else {
-    drawPoseGuide(level, w, h, cx);
-  }
-
-  ctx.restore();
-}
-
-function drawPoseGuide(level, w, h, cx) {
-  ctx.strokeStyle = "rgba(255,200,46,0.8)";
-  ctx.fillStyle = "rgba(255,200,46,0.1)";
-
-  const drawTarget = (x, y, r) => {
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  };
-
-  if (level.detector === "detectHandsUp") {
-    const headY = h * 0.28;
-    const handY = h * 0.1;
-    ctx.beginPath();
-    ctx.ellipse(cx, headY, w * 0.11, h * 0.07, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    drawTarget(cx - w * 0.24, handY, 32);
-    drawTarget(cx + w * 0.24, handY, 32);
-    ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(255,200,46,0.95)";
-    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("🙌 両手を丸枠に合わせよう！", cx, h * 0.88);
-  } else if (level.detector === "detectMacho") {
-    const shoulderY = h * 0.38;
-    const elbowY = h * 0.22;
-    drawTarget(cx - w * 0.2, elbowY, 28);
-    drawTarget(cx + w * 0.2, elbowY, 28);
-    ctx.beginPath();
-    ctx.moveTo(cx - w * 0.2, shoulderY);
-    ctx.lineTo(cx - w * 0.2, elbowY);
-    ctx.moveTo(cx + w * 0.2, shoulderY);
-    ctx.lineTo(cx + w * 0.2, elbowY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(255,200,46,0.95)";
-    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("💪 両肘を丸枠の高さまで！", cx, h * 0.88);
-  } else if (level.detector === "detectVictory") {
-    drawTarget(cx - w * 0.22, h * 0.12, 30);
-    drawTarget(cx + w * 0.28, h * 0.38, 26);
-    ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(255,200,46,0.95)";
-    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("🕺 左を上・右を横に！", cx, h * 0.88);
+function drawGuideFrame(level, tracked) {
+  if (!tracked) {
+    drawLevelGuide(ctx, level, $canvas.width, $canvas.height);
   }
 }
 
 let lastTimestamp = -1;
+let lastFaceResult = null;
+let lastPoseResult = null;
 
-function detectionLoop(timestamp) {
+function detectionLoop() {
   if (!GameState.isRunning) return;
 
+  const timestamp = performance.now();
   if (timestamp === lastTimestamp) {
     GameState.animFrameId = requestAnimationFrame(detectionLoop);
     return;
@@ -1292,24 +1222,49 @@ function detectionLoop(timestamp) {
 
   const level = currentLevel();
 
+  if ($video.paused || $video.readyState < 2 || !$video.videoWidth) {
+    resumeCamera();
+    GameState.animFrameId = requestAnimationFrame(detectionLoop);
+    return;
+  }
+
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
-  drawGuideFrame(level);
 
-  let confidence = 0;
+  const needsFace = level.type === "face" || level.type === "both";
+  const needsPose = level.type === "pose" || level.type === "both";
 
-  if (level.type === "face" && faceLandmarker) {
-    const result = faceLandmarker.detectForVideo($video, timestamp);
-    if (result.faceLandmarks && result.faceLandmarks.length > 0) {
-      drawFaceLandmarks(result.faceLandmarks[0]);
-      confidence = DETECTORS[level.detector](result);
-    }
+  if (needsFace && faceLandmarker) {
+    lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
+  } else {
+    lastFaceResult = null;
+  }
 
-  } else if (level.type === "pose" && poseLandmarker) {
-    const result = poseLandmarker.detectForVideo($video, timestamp);
-    if (result.landmarks && result.landmarks.length > 0) {
-      drawPoseLandmarks(result.landmarks[0]);
-      confidence = DETECTORS[level.detector](result);
-    }
+  if (needsPose && poseLandmarker) {
+    lastPoseResult = poseLandmarker.detectForVideo($video, timestamp);
+  } else {
+    lastPoseResult = null;
+  }
+
+  const tracked = drawTrackedLevelFX(
+    ctx, level, lastFaceResult, lastPoseResult, $canvas.width, $canvas.height
+  );
+
+  drawGuideFrame(level, tracked);
+
+  if (lastFaceResult?.faceLandmarks) {
+    lastFaceResult.faceLandmarks.forEach(lm => drawFaceLandmarks(lm, tracked));
+  }
+  if (lastPoseResult?.landmarks) {
+    lastPoseResult.landmarks.forEach(lm => drawPoseLandmarks(lm, tracked));
+  }
+
+  let confidence = evaluateDetection(level, lastFaceResult, lastPoseResult);
+
+  if (level.players >= 2) {
+    const count = level.type === "face"
+      ? (lastFaceResult?.faceLandmarks?.length ?? 0)
+      : (lastPoseResult?.landmarks?.length ?? 0);
+    if (count < 2) confidence = Math.min(confidence, 0.35);
   }
 
   updateGauge(confidence);
@@ -1329,7 +1284,9 @@ function detectionLoop(timestamp) {
   GameState.animFrameId = requestAnimationFrame(detectionLoop);
 }
 
-function drawFaceLandmarks(landmarks) {
+function drawFaceLandmarks(landmarks, fxActive) {
+  if (fxActive) return;
+
   const FACE_MESH = [
     [33,133],[133,362],[362,263],[263,33],
     [61,291],[291,375],[375,61],
@@ -1362,8 +1319,9 @@ function drawFaceLandmarks(landmarks) {
   ctx.restore();
 }
 
-function drawPoseLandmarks(landmarks) {
+function drawPoseLandmarks(landmarks, fxActive) {
   if (!landmarks) return;
+  if (fxActive) return;
 
   const CONNECTIONS = [
     [11,12],[11,13],[13,15],[12,14],[14,16],
@@ -1404,115 +1362,6 @@ function drawPoseLandmarks(landmarks) {
   ctx.restore();
 }
 
-const DETECTORS = {
-  detectSmile(result) {
-    if (!result.faceBlendshapes || result.faceBlendshapes.length === 0) return 0;
-
-    const shapes = result.faceBlendshapes[0].categories;
-    const get = name => shapes.find(s => s.categoryName === name)?.score ?? 0;
-
-    const smileL = get("mouthSmileLeft");
-    const smileR = get("mouthSmileRight");
-    const squintL = get("eyeSquintLeft");
-    const squintR = get("eyeSquintRight");
-
-    const smileScore  = (smileL + smileR) / 2;
-    const squintScore = (squintL + squintR) / 2;
-
-    return smileScore * 0.7 + squintScore * 0.3;
-  },
-
-  detectWink(result) {
-    if (!result.faceBlendshapes || result.faceBlendshapes.length === 0) return 0;
-
-    const shapes = result.faceBlendshapes[0].categories;
-    const get = name => shapes.find(s => s.categoryName === name)?.score ?? 0;
-
-    const blinkL = get("eyeBlinkLeft");
-    const blinkR = get("eyeBlinkRight");
-
-    const leftWink  = blinkL > 0.65 && blinkR < 0.2;
-    const rightWink = blinkR > 0.65 && blinkL < 0.2;
-
-    if (leftWink || rightWink) {
-      return leftWink ? blinkL : blinkR;
-    }
-    return 0;
-  },
-
-  detectHandsUp(result) {
-    if (!result.landmarks || result.landmarks.length === 0) return 0;
-    const lm = result.landmarks[0];
-
-    const nose      = lm[0];
-    const leftWrist  = lm[15];
-    const rightWrist = lm[16];
-
-    if (!nose || !leftWrist || !rightWrist) return 0;
-
-    if (leftWrist.visibility < 0.6 || rightWrist.visibility < 0.6 || nose.visibility < 0.5) return 0;
-
-    const leftUp  = nose.y - leftWrist.y;
-    const rightUp = nose.y - rightWrist.y;
-
-    if (leftUp < 0.05 || rightUp < 0.05) return 0;
-
-    const leftScore  = Math.min(Math.max(leftUp * 5, 0), 1);
-    const rightScore = Math.min(Math.max(rightUp * 5, 0), 1);
-
-    return Math.min(leftScore, rightScore);
-  },
-
-  detectMacho(result) {
-    if (!result.landmarks || result.landmarks.length === 0) return 0;
-    const lm = result.landmarks[0];
-
-    const lShoulder = lm[11], rShoulder = lm[12];
-    const lElbow    = lm[13], rElbow    = lm[14];
-    const lWrist    = lm[15], rWrist    = lm[16];
-
-    if (!lShoulder || !rShoulder || !lElbow || !rElbow || !lWrist || !rWrist) return 0;
-    if (lElbow.visibility < 0.6 || rElbow.visibility < 0.6) return 0;
-
-    const lElbowUp = lShoulder.y - lElbow.y;
-    const rElbowUp = rShoulder.y - rElbow.y;
-
-    if (lElbowUp < 0.04 || rElbowUp < 0.04) return 0;
-
-    const elbowScore = (
-      Math.min(Math.max(lElbowUp * 6, 0), 1) +
-      Math.min(Math.max(rElbowUp * 6, 0), 1)
-    ) / 2;
-
-    return elbowScore;
-  },
-
-  detectVictory(result) {
-    if (!result.landmarks || result.landmarks.length === 0) return 0;
-    const lm = result.landmarks[0];
-
-    const lShoulder = lm[11], rShoulder = lm[12];
-    const lWrist    = lm[15], rWrist    = lm[16];
-
-    if (!lShoulder || !rShoulder || !lWrist || !rWrist) return 0;
-    if (lWrist.visibility < 0.5 || rWrist.visibility < 0.5) return 0;
-
-    const lArmUp    = lShoulder.y - lWrist.y;
-    const rArmSide  = Math.abs(rWrist.y - rShoulder.y);
-
-    const patternA = Math.min(Math.max(lArmUp * 4, 0), 1) *
-                     Math.min(Math.max((0.15 - rArmSide) * 10, 0), 1);
-
-    const rArmUp    = rShoulder.y - rWrist.y;
-    const lArmSide  = Math.abs(lWrist.y - lShoulder.y);
-
-    const patternB = Math.min(Math.max(rArmUp * 4, 0), 1) *
-                     Math.min(Math.max((0.15 - lArmSide) * 10, 0), 1);
-
-    return Math.max(patternA, patternB);
-  }
-};
-
 function updateGauge(confidence) {
   const pct = Math.round(confidence * 100);
   $gaugeFill.style.width = `${pct}%`;
@@ -1529,9 +1378,13 @@ function updateLevelUI(level) {
   $levelNum.textContent      = level.id;
   $missionEmoji.textContent  = level.emoji;
   $missionTitle.textContent  = level.title;
-  $missionHint.textContent   = level.hint;
+  $missionHint.textContent   = level.players >= 2
+    ? `👥 ${level.hint}`
+    : level.hint;
   document.getElementById("clear-level-tag").textContent = `LEVEL ${level.id} CLEAR!`;
   document.getElementById("clear-emoji-display").textContent = level.emoji;
+  updateGuideOverlay(level);
+  resetFXSmoothing();
   updateGauge(0);
   GameState.holdCount = 0;
   GameState.isCleared = false;
@@ -1647,7 +1500,10 @@ async function shareResult() {
 function getSharePayload() {
   const level = currentLevel();
   const gameUrl = window.location.href.split("?")[0];
-  const text = `🎮 POSE\nLEVEL ${level.id}「${level.title}」${level.emoji}クリア！\nスコア: ${GameState.score}点\n#POSE #AIPoseGame\n${gameUrl}`;
+  const shareLine = level.shareText
+    ? level.shareText
+    : `LEVEL ${level.id}「${level.title}」${level.emoji}クリア！`;
+  const text = `🎮 POSE\n${shareLine}\nスコア: ${GameState.score}点\n#POSE\n${gameUrl}`;
   return { level, gameUrl, text };
 }
 
@@ -1706,17 +1562,50 @@ async function startLevel(index) {
 
   cancelAnimationFrame(GameState.animFrameId);
   resetClearModalPreview();
+  resetFXSmoothing();
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
-  updateLevelUI(currentLevel());
+  const level = currentLevel();
+  const prevLevel = index > 0 ? LEVELS[index - 1] : null;
+
+  const prevNeedsPose = prevLevel && (prevLevel.type === "pose" || prevLevel.type === "both");
+  const nextNeedsPose = level.type === "pose" || level.type === "both";
+  const prevNeedsFace = prevLevel && (prevLevel.type === "face" || prevLevel.type === "both");
+  const nextNeedsFace = level.type === "face" || level.type === "both";
+
+  if (prevNeedsPose && !nextNeedsPose) {
+    releasePoseLandmarker();
+  }
+  if (prevNeedsFace && !nextNeedsFace) {
+    releaseFaceLandmarker();
+  }
+
+  if (prevLevel && (prevLevel.type === "face" && (level.type === "pose" || level.type === "both"))) {
+    setLoadingText("カメラ切替中...");
+    showLoading(true);
+    try {
+      await restartCameraStream();
+    } catch (err) {
+      console.error("[Camera] 再取得失敗:", err);
+      showLoading(false);
+      return false;
+    }
+  }
+
+  updateLevelUI(level);
 
   await resumeCamera();
 
-  const ready = await ensureDetectorForLevel(currentLevel());
+  const loadingMsg = nextNeedsPose && nextNeedsFace
+    ? "AI準備中..."
+    : nextNeedsPose
+      ? "ポーズAI準備中..."
+      : "AI INITIALIZING...";
+  setLoadingText(loadingMsg);
+  const ready = await ensureDetectorForLevel(level);
   if (!ready) return false;
 
-  // レベル2中にポーズモデルを先読み（レベル3以降の切替をスムーズに）
-  if (currentLevel().id === 2 && !poseLandmarker) {
+  if (level.id === 1 && !poseLandmarker) {
     ensurePoseLandmarker().catch(() => {});
   }
 
