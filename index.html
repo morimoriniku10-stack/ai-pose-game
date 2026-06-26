@@ -413,6 +413,45 @@
       box-shadow: 0 0 16px rgba(29,161,242,0.4);
     }
 
+    .share-section {
+      width: 100%;
+    }
+
+    .share-label {
+      font-size: 11px;
+      color: var(--text-lo);
+      letter-spacing: 0.12em;
+      margin-bottom: 10px;
+    }
+
+    .sns-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .sns-btn {
+      pointer-events: auto;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+      color: #fff;
+      letter-spacing: 0.05em;
+      transition: filter 0.15s, transform 0.1s;
+    }
+
+    .sns-btn:active { transform: scale(0.95); }
+    .sns-line      { background: #06c755; }
+    .sns-x         { background: #000; }
+    .sns-instagram { background: linear-gradient(135deg, #f58529, #dd2a7b, #8134af); }
+    .sns-tiktok    { background: #010101; border: 1px solid #25f4ee; color: #25f4ee; }
+    .sns-facebook  { background: #1877f2; }
+    .sns-native    { background: var(--surface2); color: var(--text-hi); border: 1px solid rgba(255,255,255,0.15); }
+
     #clear-modal {
       display: none;
       position: fixed;
@@ -625,10 +664,21 @@
 
     <img id="capture-preview" alt="クリア時のポーズ" />
 
+    <div class="share-section">
+      <p class="share-label">SNSでシェア</p>
+      <div class="sns-grid">
+        <button class="sns-btn sns-line" data-sns="line">LINE</button>
+        <button class="sns-btn sns-x" data-sns="x">X</button>
+        <button class="sns-btn sns-instagram" data-sns="instagram">Instagram</button>
+        <button class="sns-btn sns-tiktok" data-sns="tiktok">TikTok</button>
+        <button class="sns-btn sns-facebook" data-sns="facebook">Facebook</button>
+        <button class="sns-btn sns-native" data-sns="native">その他</button>
+      </div>
+    </div>
+
     <div id="ad-slot">AD SPACE 300×100</div>
 
     <div class="modal-actions">
-      <button class="btn btn-share" id="share-btn" style="pointer-events:auto">📤 シェア</button>
       <button class="btn btn-primary" id="next-btn" style="pointer-events:auto">NEXT →</button>
     </div>
     <button class="btn btn-secondary" id="retry-btn" style="pointer-events:auto">もう一度</button>
@@ -659,18 +709,18 @@ const LEVELS = [
     emoji: "😂",
     hint: "口角を上げて笑顔に！",
     detector: "detectSmile",
-    clearThreshold: 0.65,
-    holdFrames: 10
+    clearThreshold: 0.78,
+    holdFrames: 15
   },
   {
     id: 2,
     type: "face",
     title: "ウインク",
     emoji: "😉",
-    hint: "片目だけ閉じてウインク！",
+    hint: "片目だけしっかり閉じてウインク！",
     detector: "detectWink",
-    clearThreshold: 0.6,
-    holdFrames: 8
+    clearThreshold: 0.72,
+    holdFrames: 12
   },
   {
     id: 3,
@@ -679,8 +729,8 @@ const LEVELS = [
     emoji: "🙌",
     hint: "両手首を頭より高く上げよう",
     detector: "detectHandsUp",
-    clearThreshold: 0.8,
-    holdFrames: 12
+    clearThreshold: 0.88,
+    holdFrames: 18
   },
   {
     id: 4,
@@ -689,8 +739,8 @@ const LEVELS = [
     emoji: "💪",
     hint: "両肘を肩より高く上げてポーズ！",
     detector: "detectMacho",
-    clearThreshold: 0.75,
-    holdFrames: 15
+    clearThreshold: 0.85,
+    holdFrames: 20
   },
   {
     id: 5,
@@ -699,8 +749,8 @@ const LEVELS = [
     emoji: "🕺",
     hint: "片腕を上げ、もう片腕は横に伸ばそう",
     detector: "detectVictory",
-    clearThreshold: 0.7,
-    holdFrames: 12
+    clearThreshold: 0.82,
+    holdFrames: 18
   }
 ];
 
@@ -1047,6 +1097,103 @@ function resizeCanvas() {
   $canvas.height = window.innerHeight;
 }
 
+async function resumeCamera() {
+  if (!$video.srcObject) return;
+  try {
+    if ($video.paused) await $video.play();
+    lastTimestamp = -1;
+  } catch (err) {
+    console.warn("[Camera] 再開失敗:", err);
+  }
+}
+
+function resetClearModalPreview() {
+  const $preview = document.getElementById("capture-preview");
+  $preview.removeAttribute("src");
+  $preview.style.display = "none";
+}
+
+function drawGuideFrame(level) {
+  const w = $canvas.width;
+  const h = $canvas.height;
+  const cx = w / 2;
+
+  ctx.save();
+  ctx.setLineDash([10, 8]);
+  ctx.lineWidth = 3;
+
+  if (level.type === "face") {
+    const cy = h * 0.36;
+    ctx.strokeStyle = "rgba(184,255,46,0.75)";
+    ctx.fillStyle = "rgba(184,255,46,0.08)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, w * 0.26, h * 0.19, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(184,255,46,0.95)";
+    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("顔を枠に合わせて！", cx, cy + h * 0.22);
+  } else {
+    drawPoseGuide(level, w, h, cx);
+  }
+
+  ctx.restore();
+}
+
+function drawPoseGuide(level, w, h, cx) {
+  ctx.strokeStyle = "rgba(255,200,46,0.8)";
+  ctx.fillStyle = "rgba(255,200,46,0.1)";
+
+  const drawTarget = (x, y, r) => {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  };
+
+  if (level.detector === "detectHandsUp") {
+    const headY = h * 0.28;
+    const handY = h * 0.1;
+    ctx.beginPath();
+    ctx.ellipse(cx, headY, w * 0.11, h * 0.07, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    drawTarget(cx - w * 0.24, handY, 32);
+    drawTarget(cx + w * 0.24, handY, 32);
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,200,46,0.95)";
+    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("🙌 両手を丸枠に合わせよう！", cx, h * 0.88);
+  } else if (level.detector === "detectMacho") {
+    const shoulderY = h * 0.38;
+    const elbowY = h * 0.22;
+    drawTarget(cx - w * 0.2, elbowY, 28);
+    drawTarget(cx + w * 0.2, elbowY, 28);
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.2, shoulderY);
+    ctx.lineTo(cx - w * 0.2, elbowY);
+    ctx.moveTo(cx + w * 0.2, shoulderY);
+    ctx.lineTo(cx + w * 0.2, elbowY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,200,46,0.95)";
+    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("💪 両肘を丸枠の高さまで！", cx, h * 0.88);
+  } else if (level.detector === "detectVictory") {
+    drawTarget(cx - w * 0.22, h * 0.12, 30);
+    drawTarget(cx + w * 0.28, h * 0.38, 26);
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,200,46,0.95)";
+    ctx.font = "bold 13px 'M PLUS Rounded 1c', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("🕺 左を上・右を横に！", cx, h * 0.88);
+  }
+}
+
 let lastTimestamp = -1;
 
 function detectionLoop(timestamp) {
@@ -1061,6 +1208,7 @@ function detectionLoop(timestamp) {
   const level = currentLevel();
 
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
+  drawGuideFrame(level);
 
   let confidence = 0;
 
@@ -1097,13 +1245,33 @@ function detectionLoop(timestamp) {
 }
 
 function drawFaceLandmarks(landmarks) {
+  const FACE_MESH = [
+    [33,133],[133,362],[362,263],[263,33],
+    [61,291],[291,375],[375,61],
+    [159,386],[386,14],[14,159]
+  ];
+
   ctx.save();
-  ctx.fillStyle = "rgba(0,245,255,0.5)";
+  ctx.shadowColor = "rgba(0,245,255,0.9)";
+  ctx.shadowBlur = 8;
+  ctx.strokeStyle = "rgba(0,245,255,0.65)";
+  ctx.lineWidth = 1.5;
+
+  for (const [a, b] of FACE_MESH) {
+    const lmA = landmarks[a], lmB = landmarks[b];
+    if (!lmA || !lmB) continue;
+    ctx.beginPath();
+    ctx.moveTo((1 - lmA.x) * $canvas.width, lmA.y * $canvas.height);
+    ctx.lineTo((1 - lmB.x) * $canvas.width, lmB.y * $canvas.height);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "rgba(0,245,255,0.92)";
   for (const lm of landmarks) {
     const x = (1 - lm.x) * $canvas.width;
     const y = lm.y * $canvas.height;
     ctx.beginPath();
-    ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+    ctx.arc(x, y, 2.8, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -1119,8 +1287,10 @@ function drawPoseLandmarks(landmarks) {
   ];
 
   ctx.save();
-  ctx.strokeStyle = "rgba(0,245,255,0.5)";
-  ctx.lineWidth = 2;
+  ctx.shadowColor = "rgba(184,255,46,0.8)";
+  ctx.shadowBlur = 10;
+  ctx.strokeStyle = "rgba(0,245,255,0.75)";
+  ctx.lineWidth = 3;
 
   for (const [a, b] of CONNECTIONS) {
     const lmA = landmarks[a], lmB = landmarks[b];
@@ -1136,13 +1306,13 @@ function drawPoseLandmarks(landmarks) {
     ctx.stroke();
   }
 
-  ctx.fillStyle = "rgba(184,255,46,0.8)";
+  ctx.fillStyle = "rgba(184,255,46,0.95)";
   for (const lm of landmarks) {
     if (lm.visibility < 0.5) continue;
     const x = (1 - lm.x) * $canvas.width;
     const y = lm.y * $canvas.height;
     ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -1176,8 +1346,8 @@ const DETECTORS = {
     const blinkL = get("eyeBlinkLeft");
     const blinkR = get("eyeBlinkRight");
 
-    const leftWink  = blinkL > 0.5 && blinkR < 0.3;
-    const rightWink = blinkR > 0.5 && blinkL < 0.3;
+    const leftWink  = blinkL > 0.65 && blinkR < 0.2;
+    const rightWink = blinkR > 0.65 && blinkL < 0.2;
 
     if (leftWink || rightWink) {
       return leftWink ? blinkL : blinkR;
@@ -1195,15 +1365,17 @@ const DETECTORS = {
 
     if (!nose || !leftWrist || !rightWrist) return 0;
 
-    if (leftWrist.visibility < 0.5 || rightWrist.visibility < 0.5) return 0;
+    if (leftWrist.visibility < 0.6 || rightWrist.visibility < 0.6 || nose.visibility < 0.5) return 0;
 
     const leftUp  = nose.y - leftWrist.y;
     const rightUp = nose.y - rightWrist.y;
 
-    const leftScore  = Math.min(Math.max(leftUp * 4, 0), 1);
-    const rightScore = Math.min(Math.max(rightUp * 4, 0), 1);
+    if (leftUp < 0.05 || rightUp < 0.05) return 0;
 
-    return (leftScore + rightScore) / 2;
+    const leftScore  = Math.min(Math.max(leftUp * 5, 0), 1);
+    const rightScore = Math.min(Math.max(rightUp * 5, 0), 1);
+
+    return Math.min(leftScore, rightScore);
   },
 
   detectMacho(result) {
@@ -1215,14 +1387,16 @@ const DETECTORS = {
     const lWrist    = lm[15], rWrist    = lm[16];
 
     if (!lShoulder || !rShoulder || !lElbow || !rElbow || !lWrist || !rWrist) return 0;
-    if (lElbow.visibility < 0.5 || rElbow.visibility < 0.5) return 0;
+    if (lElbow.visibility < 0.6 || rElbow.visibility < 0.6) return 0;
 
     const lElbowUp = lShoulder.y - lElbow.y;
     const rElbowUp = rShoulder.y - rElbow.y;
 
+    if (lElbowUp < 0.04 || rElbowUp < 0.04) return 0;
+
     const elbowScore = (
-      Math.min(Math.max(lElbowUp * 5, 0), 1) +
-      Math.min(Math.max(rElbowUp * 5, 0), 1)
+      Math.min(Math.max(lElbowUp * 6, 0), 1) +
+      Math.min(Math.max(rElbowUp * 6, 0), 1)
     ) / 2;
 
     return elbowScore;
@@ -1348,25 +1522,22 @@ function spawnParticles() {
 }
 
 async function shareResult() {
-  const level = currentLevel();
-  // window.location.origin でVercel/GitHub PagesどちらのURLも自動取得
-  const gameUrl = window.location.href.split("?")[0];
-  const shareText = `🎮 AI Pose Game\nLEVEL ${level.id}「${level.title}」${level.emoji}クリア！\nスコア: ${GameState.score}点\n#AIPoseGame #AIゲーム\n${gameUrl}`;
+  const { text } = getSharePayload();
 
   try {
-    if (navigator.share && navigator.canShare) {
+    if (navigator.share && window._captureDataUrl) {
       const response = await fetch(window._captureDataUrl);
       const blob     = await response.blob();
       const file     = new File([blob], "pose-game-clear.jpg", { type: "image/jpeg" });
 
-      if (navigator.canShare({ files: [file] })) {
-        await navigator.share({ text: shareText, files: [file] });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ text, files: [file] });
         return;
       }
     }
 
     if (navigator.share) {
-      await navigator.share({ text: shareText });
+      await navigator.share({ text });
       return;
     }
   } catch (err) {
@@ -1375,11 +1546,11 @@ async function shareResult() {
   }
 
   try {
-    await navigator.clipboard.writeText(shareText);
+    await navigator.clipboard.writeText(text);
     alert("テキストをコピーしました！SNSに貼り付けてシェアしてください 📋");
   } catch (clipErr) {
     const ta = document.createElement("textarea");
-    ta.value = shareText;
+    ta.value = text;
     document.body.appendChild(ta);
     ta.select();
     document.execCommand("copy");
@@ -1388,16 +1559,81 @@ async function shareResult() {
   }
 }
 
+function getSharePayload() {
+  const level = currentLevel();
+  const gameUrl = window.location.href.split("?")[0];
+  const text = `🎮 POSE\nLEVEL ${level.id}「${level.title}」${level.emoji}クリア！\nスコア: ${GameState.score}点\n#POSE #AIPoseGame\n${gameUrl}`;
+  return { level, gameUrl, text };
+}
+
+function downloadCaptureImage() {
+  if (!window._captureDataUrl) return;
+  const a = document.createElement("a");
+  a.href = window._captureDataUrl;
+  a.download = `pose-level${currentLevel().id}.jpg`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function shareToSNS(platform) {
+  const { gameUrl, text } = getSharePayload();
+
+  switch (platform) {
+    case "line":
+      window.open(
+        `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(gameUrl)}&text=${encodeURIComponent(text)}`,
+        "_blank", "noopener,noreferrer"
+      );
+      break;
+    case "x":
+      window.open(
+        `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(gameUrl)}`,
+        "_blank", "noopener,noreferrer"
+      );
+      break;
+    case "facebook":
+      window.open(
+        `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(gameUrl)}`,
+        "_blank", "noopener,noreferrer"
+      );
+      break;
+    case "instagram":
+      downloadCaptureImage();
+      alert("画像を保存しました。\nInstagramアプリを開き、ストーリーまたは投稿に画像を追加してください。");
+      break;
+    case "tiktok":
+      downloadCaptureImage();
+      alert("画像を保存しました。\nTikTokアプリを開き、投稿作成から画像を追加してください。");
+      break;
+    case "native":
+      await shareResult();
+      break;
+  }
+}
+
 async function startLevel(index) {
   GameState.currentLevelIndex = index;
   GameState.holdCount         = 0;
   GameState.isCleared         = false;
   GameState.isRunning         = false;
+  lastTimestamp               = -1;
+
+  cancelAnimationFrame(GameState.animFrameId);
+  resetClearModalPreview();
+  ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
   updateLevelUI(currentLevel());
 
+  await resumeCamera();
+
   const ready = await ensureDetectorForLevel(currentLevel());
   if (!ready) return false;
+
+  // レベル2中にポーズモデルを先読み（レベル3以降の切替をスムーズに）
+  if (currentLevel().id === 2 && !poseLandmarker) {
+    ensurePoseLandmarker().catch(() => {});
+  }
 
   GameState.isRunning = true;
   GameState.animFrameId = requestAnimationFrame(detectionLoop);
@@ -1406,6 +1642,7 @@ async function startLevel(index) {
 
 async function goNextLevel() {
   document.getElementById("clear-modal").classList.remove("visible");
+  resetClearModalPreview();
 
   if (GameState.currentLevelIndex < LEVELS.length - 1) {
     const started = await startLevel(GameState.currentLevelIndex + 1);
@@ -1419,6 +1656,7 @@ async function goNextLevel() {
 
 async function retryLevel() {
   document.getElementById("clear-modal").classList.remove("visible");
+  resetClearModalPreview();
   const started = await startLevel(GameState.currentLevelIndex);
   if (!started) {
     document.getElementById("clear-modal").classList.add("visible");
@@ -1492,7 +1730,9 @@ document.getElementById("start-btn").addEventListener("click", async () => {
 
 document.getElementById("next-btn").addEventListener("click", goNextLevel);
 document.getElementById("retry-btn").addEventListener("click", retryLevel);
-document.getElementById("share-btn").addEventListener("click", shareResult);
+document.querySelectorAll(".sns-btn").forEach(btn => {
+  btn.addEventListener("click", () => shareToSNS(btn.dataset.sns));
+});
 
 function init() {
   showCompatibilityResult(checkCompatibility());
