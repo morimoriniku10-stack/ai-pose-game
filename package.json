@@ -4,12 +4,7 @@
   "private": true,
   "description": "カメラでポーズを真似してクリアするAIゲーム",
   "scripts": {
-    "build": "node scripts/copy-mediapipe.mjs",
-    "postinstall": "node scripts/copy-mediapipe.mjs",
     "dev": "npx serve . -p 3000",
     "preview": "npx serve . -p 3000"
-  },
-  "dependencies": {
-    "@mediapipe/tasks-vision": "0.10.14"
   }
 }

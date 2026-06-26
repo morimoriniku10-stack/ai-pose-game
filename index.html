@@ -724,11 +724,9 @@ let faceInitPromise = null;
 let poseInitPromise = null;
 
 const FACE_MODELS = [
-  "/models/face_landmarker.task",
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 ];
 const POSE_MODELS = [
-  "/models/pose_landmarker_lite.task",
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task"
 ];
 
@@ -853,22 +851,16 @@ async function getVisionTask() {
   if (visionTask) return visionTask;
   await waitForMediaPipe(isMobile() ? 90000 : 60000);
 
-  const wasmBases = ["/wasm", `${window.MP.CDN}/wasm`];
-  let lastError = null;
-
-  for (const base of wasmBases) {
-    try {
-      visionTask = await window.MP.FilesetResolver.forVisionTasks(base);
-      console.log("[AI] WASM 読込成功:", base);
-      return visionTask;
-    } catch (err) {
-      lastError = err;
-      visionTask = null;
-      console.warn("[AI] WASM 失敗:", base, err);
-    }
+  // CDNからWASMを読み込む（ローカルキャッシュなし・シンプル構成）
+  const wasmBase = `${window.MP.CDN}/wasm`;
+  try {
+    visionTask = await window.MP.FilesetResolver.forVisionTasks(wasmBase);
+    console.log("[AI] WASM 読込成功:", wasmBase);
+    return visionTask;
+  } catch (err) {
+    visionTask = null;
+    throw err || new Error("WASM の読み込みに失敗しました");
   }
-
-  throw lastError || new Error("WASM の読み込みに失敗しました");
 }
 
 async function createFaceLandmarker(vision, delegate, modelPath) {
@@ -1021,6 +1013,11 @@ const $scoreVal   = document.getElementById("score-val");
 const ctx         = $canvas.getContext("2d");
 
 async function startCamera() {
+  // 既存ストリームがあれば停止してから再起動（リプレイ時の二重起動防止）
+  if ($video.srcObject) {
+    $video.srcObject.getTracks().forEach(t => t.stop());
+    $video.srcObject = null;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -1352,7 +1349,9 @@ function spawnParticles() {
 
 async function shareResult() {
   const level = currentLevel();
-  const shareText = `🎮 AI Pose Game\nLEVEL ${level.id}「${level.title}」${level.emoji}クリア！\nスコア: ${GameState.score}点\n#AIPoseGame #AIゲーム`;
+  // window.location.origin でVercel/GitHub PagesどちらのURLも自動取得
+  const gameUrl = window.location.href.split("?")[0];
+  const shareText = `🎮 AI Pose Game\nLEVEL ${level.id}「${level.title}」${level.emoji}クリア！\nスコア: ${GameState.score}点\n#AIPoseGame #AIゲーム\n${gameUrl}`;
 
   try {
     if (navigator.share && navigator.canShare) {
