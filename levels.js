@@ -38,13 +38,13 @@ const LEVELS = [
     clearThreshold: 0.58, holdFrames: 14
   },
   {
-    id: 5, type: "pose", players: 1,
+    id: 5, type: "both", players: 1,
     title: "1ミリも反省していない謝罪会見", emoji: "🎤",
-    hint: "深くお辞儀しつつ、顔は前を向いて！",
+    hint: "少し離れて上半身を映し、深くお辞儀！",
     detector: "detectApologyBow",
     guide: "press-mic",
     shareText: "絶対に反省していない謝罪会見に成功しました。 #AIシルエットマッチ",
-    clearThreshold: 0.55, holdFrames: 16
+    clearThreshold: 0.42, holdFrames: 14
   },
   {
     id: 6, type: "both", players: 1,
@@ -53,7 +53,7 @@ const LEVELS = [
     detector: "detectUffun",
     guide: "uffun",
     shareText: "令和に蘇るあざとさ1000%の『うっふん』を見て。 #AIシルエットマッチ",
-    clearThreshold: 0.52, holdFrames: 16
+    clearThreshold: 0.45, holdFrames: 14
   },
   {
     id: 7, type: "both", players: 1,
@@ -62,16 +62,16 @@ const LEVELS = [
     detector: "detectCockroachPanic",
     guide: "cockroach",
     shareText: "部屋にGが出た時の臨場感あふれるポーズです。 #AIシルエットマッチ",
-    clearThreshold: 0.55, holdFrames: 14
+    clearThreshold: 0.42, holdFrames: 14
   },
   {
     id: 8, type: "pose", players: 1,
     title: "進撃の巨人・奇行種走り", emoji: "🏃",
-    hint: "腕を後ろに、上体を前傾、片足を高く！",
+    hint: "スマホを離して上半身〜腰を映し、変な走りポーズ！",
     detector: "detectAbnormalRun",
     guide: "abnormal-run",
     shareText: "奇行種として検知されました。 #AIシルエットマッチ",
-    clearThreshold: 0.50, holdFrames: 16
+    clearThreshold: 0.42, holdFrames: 14
   },
   {
     id: 9, type: "both", players: 1,
@@ -80,7 +80,7 @@ const LEVELS = [
     detector: "detectKaijiDespair",
     guide: "despair",
     shareText: "キンキンに冷えてやがる……！圧倒的絶望！ #AIシルエットマッチ",
-    clearThreshold: 0.52, holdFrames: 16
+    clearThreshold: 0.42, holdFrames: 14
   },
   {
     id: 10, type: "pose", players: 1,
@@ -213,10 +213,16 @@ function faceLm(result, faceIdx, idx) {
   return result?.faceLandmarks?.[faceIdx]?.[idx] ?? null;
 }
 
-function poseLm(result, poseIdx, idx, minVis = 0.4) {
+function poseLm(result, poseIdx, idx, minVis = 0.25) {
   const lm = result?.landmarks?.[poseIdx]?.[idx];
   if (!lm || (lm.visibility ?? 1) < minVis) return null;
   return lm;
+}
+
+function blendScore(...vals) {
+  const ok = vals.filter(v => v > 0);
+  if (!ok.length) return 0;
+  return ok.reduce((a, b) => a + b, 0) / ok.length;
 }
 
 function lmDist(a, b) {
@@ -325,85 +331,129 @@ const DETECTORS = {
     return despairFaceScore(result, 0);
   },
 
-  detectApologyBow(result) {
-    if (!result?.landmarks?.length) return 0;
-    const lm = result.landmarks[0];
-    const nose = lm[0], lSh = lm[11], rSh = lm[12], lHip = lm[23], rHip = lm[24];
-    if (!nose || !lSh || !lHip) return 0;
-    const shoulderY = (lSh.y + rSh.y) / 2;
-    const hipY = (lHip.y + (rHip?.y ?? lHip.y)) / 2;
-    const bow = clamp01((nose.y - shoulderY) * 4);
-    const deep = clamp01(1 - Math.abs(nose.y - hipY) * 6);
-    const forward = clamp01((nose.visibility ?? 0) * 1.2);
-    return minScore(bow, deep * 0.8 + forward * 0.2);
+  detectApologyBow({ face, pose }) {
+    let score = 0;
+
+    if (pose?.landmarks?.length) {
+      const nose = poseLm(pose, 0, 0);
+      const lSh = poseLm(pose, 0, 11);
+      const rSh = poseLm(pose, 0, 12);
+      const lW = poseLm(pose, 0, 15);
+      const rW = poseLm(pose, 0, 16);
+      if (nose && lSh && rSh) {
+        const shoulderY = (lSh.y + rSh.y) / 2;
+        const headDrop = clamp01((nose.y - shoulderY + 0.02) * 4.5);
+        let hands = 0;
+        if (lW && rW) {
+          hands = clamp01(1 - lmDist(lW, rW) * 3.5) * clamp01((Math.max(lW.y, rW.y) - shoulderY + 0.04) * 3);
+        }
+        score = Math.max(headDrop, hands);
+      }
+    }
+
+    if (face?.faceLandmarks?.length) {
+      const lm = face.faceLandmarks[0];
+      const forehead = lm[10], chin = lm[152], nose = lm[1];
+      if (forehead && chin && nose) {
+        const span = Math.max(chin.y - forehead.y, 0.05);
+        const noseRatio = (nose.y - forehead.y) / span;
+        const headDown = clamp01((noseRatio - 0.48) * 3.5);
+        score = Math.max(score, headDown);
+      }
+    }
+
+    return score;
   },
 
   detectUffun({ face, pose }) {
-    if (!face?.faceLandmarks?.length || !pose?.landmarks?.length) return 0;
+    if (!face?.faceLandmarks?.length) return 0;
     const le = faceLm(face, 0, 33), re = faceLm(face, 0, 263);
     const chin = faceLm(face, 0, 152);
     if (!le || !re || !chin) return 0;
-    const tilt = clamp01(Math.abs(le.y - re.y) * 12);
-    const lW = poseLm(pose, 0, 15), rW = poseLm(pose, 0, 16);
+    const tilt = clamp01(Math.abs(le.y - re.y) * 10);
     let fingerNear = 0;
-    for (const w of [lW, rW]) {
-      if (!w) continue;
-      const d = lmDist(w, chin);
-      fingerNear = Math.max(fingerNear, clamp01(1 - d * 8));
+    if (pose?.landmarks?.length) {
+      const lW = poseLm(pose, 0, 15), rW = poseLm(pose, 0, 16);
+      for (const w of [lW, rW]) {
+        if (!w) continue;
+        fingerNear = Math.max(fingerNear, clamp01(1 - lmDist(w, chin) * 6));
+      }
     }
-    return minScore(tilt, fingerNear);
+    if (fingerNear > 0) return blendScore(tilt, fingerNear);
+    return tilt * 0.75;
   },
 
   detectCockroachPanic({ face, pose }) {
-    if (!face?.faceBlendshapes?.length || !pose?.landmarks?.length) return 0;
-    const jaw = blendGet(face, 0, "jawOpen");
-    const mouth = Math.max(jaw, blendGet(face, 0, "mouthOpen"));
-    const lm = pose.landmarks[0];
-    const nose = lm[0], lEar = lm[7], rEar = lm[8], lW = lm[15], rW = lm[16];
-    if (!nose || !lW || !rW) return 0;
-    const earY = avgScore(lEar?.y ?? nose.y - 0.05, rEar?.y ?? nose.y - 0.05);
-    const spread = clamp01(Math.abs(lW.x - rW.x) * 2.5);
-    const handHeight = minScore(
-      clamp01(1 - Math.abs(lW.y - earY) * 10),
-      clamp01(1 - Math.abs(rW.y - earY) * 10)
-    );
-    return minScore(clamp01(mouth * 1.2), spread, handHeight);
+    let mouth = 0;
+    if (face?.faceBlendshapes?.length) {
+      mouth = Math.max(
+        blendGet(face, 0, "jawOpen"),
+        blendGet(face, 0, "mouthOpen")
+      );
+    }
+    let handScore = 0;
+    if (pose?.landmarks?.length) {
+      const lm = pose.landmarks[0];
+      const nose = lm[0], lW = lm[15], rW = lm[16];
+      if (nose && lW && rW && (lW.visibility ?? 1) > 0.25 && (rW.visibility ?? 1) > 0.25) {
+        const spread = clamp01(Math.abs(lW.x - rW.x) * 2.2);
+        const earY = nose.y - 0.04;
+        handScore = blendScore(
+          clamp01(1 - Math.abs(lW.y - earY) * 8),
+          clamp01(1 - Math.abs(rW.y - earY) * 8),
+          spread
+        );
+      }
+    }
+    if (mouth > 0 && handScore > 0) return blendScore(clamp01(mouth * 1.1), handScore);
+    if (mouth > 0.5) return mouth * 0.65;
+    return handScore * 0.7;
   },
 
   detectAbnormalRun(result) {
     if (!result?.landmarks?.length) return 0;
     const lm = result.landmarks[0];
-    const lSh = lm[11], rSh = lm[12], lW = lm[15], rW = lm[16];
-    const lK = lm[25], rK = lm[26], lAnk = lm[27], rAnk = lm[28];
-    if (!lSh || !lW || !lK) return 0;
-    const armsBack = minScore(
-      clamp01((lW.y - lSh.y) * 2),
-      clamp01((rW.y - rSh.y) * 2)
+    const lSh = poseLm(result, 0, 11), rSh = poseLm(result, 0, 12);
+    const lW = poseLm(result, 0, 15), rW = poseLm(result, 0, 16);
+    const lK = poseLm(result, 0, 25), rK = poseLm(result, 0, 26);
+    const nose = poseLm(result, 0, 0);
+    if (!lSh || !nose) return 0;
+    const armsBack = blendScore(
+      lW ? clamp01((lW.y - lSh.y) * 1.8) : 0,
+      rW ? clamp01((rW.y - rSh.y) * 1.8) : 0
     );
-    const lean = clamp01((lSh.y - lm[0].y) * 3 + 0.2);
+    const lean = clamp01((lSh.y - nose.y) * 2.5 + 0.15);
     const kneeLift = Math.max(
-      clamp01((lAnk?.y ?? 1) - lK.y + 0.05),
-      clamp01((rAnk?.y ?? 1) - rK.y + 0.05)
+      lK ? clamp01((lK.y - nose.y) * -2 + 0.2) : 0,
+      rK ? clamp01((rK.y - nose.y) * -2 + 0.2) : 0
     );
-    return minScore(armsBack * 0.7 + lean * 0.3, kneeLift);
+    return blendScore(armsBack, lean, kneeLift);
   },
 
   detectKaijiDespair({ face, pose }) {
-    if (!pose?.landmarks?.length) return 0;
-    const lm = pose.landmarks[0];
-    const nose = lm[0], lW = lm[15], rW = lm[16], lEye = lm[2], rEye = lm[5];
-    if (!nose || !lW || !rW) return 0;
-    const coverL = clamp01(1 - lmDist(lW, lEye ?? nose) * 6);
-    const coverR = clamp01(1 - lmDist(rW, rEye ?? nose) * 6);
-    const headHold = clamp01(1 - Math.abs(lW.y - rW.y) * 3);
-    let faceScore = 0;
-    if (face?.faceBlendshapes?.length) {
-      faceScore = Math.max(
-        blendGet(face, 0, "mouthFrownLeft") + blendGet(face, 0, "mouthFrownRight"),
-        blendGet(face, 0, "browDownLeft") + blendGet(face, 0, "browDownRight")
-      ) / 2;
+    if (!pose?.landmarks?.length && !face?.faceLandmarks?.length) return 0;
+    let score = 0;
+    if (pose?.landmarks?.length) {
+      const nose = poseLm(pose, 0, 0);
+      const lW = poseLm(pose, 0, 15), rW = poseLm(pose, 0, 16);
+      const lEye = poseLm(pose, 0, 2), rEye = poseLm(pose, 0, 5);
+      if (lW && rW) {
+        const head = nose || lEye || rEye;
+        const cover = head
+          ? blendScore(
+            clamp01(1 - lmDist(lW, head) * 5),
+            clamp01(1 - lmDist(rW, head) * 5)
+          )
+          : 0;
+        score = Math.max(score, cover);
+      }
     }
-    return Math.max(minScore(coverL, coverR, headHold), faceScore * 0.6);
+    if (face?.faceBlendshapes?.length) {
+      const frown = (blendGet(face, 0, "mouthFrownLeft") + blendGet(face, 0, "mouthFrownRight")) / 2;
+      const brow = (blendGet(face, 0, "browDownLeft") + blendGet(face, 0, "browDownRight")) / 2;
+      score = Math.max(score, blendScore(frown * 1.2, brow));
+    }
+    return score;
   },
 
   detectOtakuRomance(result) {

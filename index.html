@@ -826,6 +826,7 @@ const FACE_MODELS = [
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 ];
 const POSE_MODELS = [
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker/float16/1/pose_landmarker.task",
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task"
 ];
 
@@ -975,7 +976,10 @@ async function createPoseLandmarker(vision, delegate, modelPath) {
   return window.MP.PoseLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: modelPath, delegate },
     runningMode: "VIDEO",
-    numPoses: 2
+    numPoses: 2,
+    minPoseDetectionConfidence: 0.35,
+    minPosePresenceConfidence: 0.35,
+    minTrackingConfidence: 0.35
   });
 }
 
@@ -1209,12 +1213,22 @@ function drawGuideFrame(level, tracked) {
 let lastTimestamp = -1;
 let lastFaceResult = null;
 let lastPoseResult = null;
+let mpFallbackMs = 0;
+
+function nextDetectionTimestamp() {
+  const videoMs = $video.currentTime;
+  if (Number.isFinite(videoMs) && videoMs > 0) {
+    return Math.round(videoMs * 1000);
+  }
+  mpFallbackMs += 33;
+  return mpFallbackMs;
+}
 
 function detectionLoop() {
   if (!GameState.isRunning) return;
 
-  const timestamp = performance.now();
-  if (timestamp === lastTimestamp) {
+  const timestamp = nextDetectionTimestamp();
+  if (timestamp <= lastTimestamp) {
     GameState.animFrameId = requestAnimationFrame(detectionLoop);
     return;
   }
@@ -1233,7 +1247,7 @@ function detectionLoop() {
   const needsFace = level.type === "face" || level.type === "both";
   const needsPose = level.type === "pose" || level.type === "both";
 
-  if (needsFace && faceLandmarker) {
+  if (faceLandmarker) {
     lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
   } else {
     lastFaceResult = null;
@@ -1277,7 +1291,7 @@ function detectionLoop() {
         return;
       }
     } else {
-      GameState.holdCount = Math.max(0, GameState.holdCount - 2);
+      GameState.holdCount = Math.max(0, GameState.holdCount - 1);
     }
   }
 
@@ -1559,6 +1573,7 @@ async function startLevel(index) {
   GameState.isCleared         = false;
   GameState.isRunning         = false;
   lastTimestamp               = -1;
+  mpFallbackMs                = 0;
 
   cancelAnimationFrame(GameState.animFrameId);
   resetClearModalPreview();
@@ -1566,36 +1581,12 @@ async function startLevel(index) {
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
   const level = currentLevel();
-  const prevLevel = index > 0 ? LEVELS[index - 1] : null;
-
-  const prevNeedsPose = prevLevel && (prevLevel.type === "pose" || prevLevel.type === "both");
-  const nextNeedsPose = level.type === "pose" || level.type === "both";
-  const prevNeedsFace = prevLevel && (prevLevel.type === "face" || prevLevel.type === "both");
-  const nextNeedsFace = level.type === "face" || level.type === "both";
-
-  if (prevNeedsPose && !nextNeedsPose) {
-    releasePoseLandmarker();
-  }
-  if (prevNeedsFace && !nextNeedsFace) {
-    releaseFaceLandmarker();
-  }
-
-  if (prevLevel && (prevLevel.type === "face" && (level.type === "pose" || level.type === "both"))) {
-    setLoadingText("カメラ切替中...");
-    showLoading(true);
-    try {
-      await restartCameraStream();
-    } catch (err) {
-      console.error("[Camera] 再取得失敗:", err);
-      showLoading(false);
-      return false;
-    }
-  }
-
   updateLevelUI(level);
 
   await resumeCamera();
 
+  const nextNeedsPose = level.type === "pose" || level.type === "both";
+  const nextNeedsFace = level.type === "face" || level.type === "both";
   const loadingMsg = nextNeedsPose && nextNeedsFace
     ? "AI準備中..."
     : nextNeedsPose
@@ -1603,9 +1594,12 @@ async function startLevel(index) {
       : "AI INITIALIZING...";
   setLoadingText(loadingMsg);
   const ready = await ensureDetectorForLevel(level);
-  if (!ready) return false;
+  if (!ready) {
+    alert("レベルの準備に失敗しました。Wi-Fi接続を確認して、もう一度お試しください。");
+    return false;
+  }
 
-  if (level.id === 1 && !poseLandmarker) {
+  if (level.id <= 3 && !poseLandmarker) {
     ensurePoseLandmarker().catch(() => {});
   }
 
@@ -1622,6 +1616,7 @@ async function goNextLevel() {
     const started = await startLevel(GameState.currentLevelIndex + 1);
     if (!started) {
       document.getElementById("clear-modal").classList.add("visible");
+      GameState.isRunning = false;
     }
   } else {
     showAllClear();
@@ -1681,6 +1676,8 @@ document.getElementById("start-btn").addEventListener("click", async () => {
   const isReplay = $startBtn.textContent === "もう一度遊ぶ";
   if (isReplay) {
     resetStartScreen();
+    releaseFaceLandmarker();
+    releasePoseLandmarker();
     GameState.currentLevelIndex = 0;
     GameState.score = 0;
     updateScore();

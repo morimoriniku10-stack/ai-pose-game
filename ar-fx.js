@@ -86,9 +86,8 @@ function analyzeFace(landmarks, w, h) {
 
 function analyzePose(landmarks, w, h) {
   const nose = landmarks[0], lSh = landmarks[11], rSh = landmarks[12];
-  const lHip = landmarks[23], rHip = landmarks[24];
   if (!nose || !lSh || !rSh) return null;
-  const vis = lm => (lm.visibility ?? 1) >= 0.4;
+  const vis = lm => (lm.visibility ?? 1) >= 0.25;
   if (!vis(nose) || !vis(lSh) || !vis(rSh)) return null;
 
   const pts = {};
@@ -104,24 +103,54 @@ function analyzePose(landmarks, w, h) {
   const lShP = pts.lSh, rShP = pts.rSh;
   const cx = (lShP.x + rShP.x) / 2;
   const shoulderY = (lShP.y + rShP.y) / 2;
-  const hipY = pts.lHip && pts.rHip ? (pts.lHip.y + pts.rHip.y) / 2 : shoulderY + w * 0.25;
-  const cy = shoulderY + (hipY - shoulderY) * 0.35;
-  const bodyW = fxDist(lShP, rShP) * 2.2;
-  const bodyH = Math.max(hipY - shoulderY + bodyW * 0.5, bodyW);
+  let hipY = shoulderY + bodyEstH(w, h);
+  if (pts.lHip && pts.rHip) {
+    hipY = (pts.lHip.y + pts.rHip.y) / 2;
+  }
+  const bodyW = Math.max(fxDist(lShP, rShP) * 2.2, 80);
+  const bodyH = Math.max(hipY - shoulderY + bodyW * 0.35, bodyW * 0.8);
+  const cy = shoulderY + bodyH * 0.28;
   const angle = Math.atan2(rShP.y - lShP.y, rShP.x - lShP.x);
   const scale = bodyW / 220;
 
   return { cx, cy, angle, scale, bodyW, bodyH, lm: landmarks, pts };
 }
 
-function withTransform(ctx, t, fn) {
+function bodyEstH(w, h) {
+  return Math.min(w, h) * 0.22;
+}
+
+function withFaceTransform(ctx, face, fn) {
   ctx.save();
-  ctx.translate(t.cx, t.cy);
-  ctx.rotate(t.angle);
-  const depthScale = 1 - (t.depth ?? 0) * 0.35;
-  ctx.scale(t.scale * depthScale, t.scale * depthScale);
-  fn(ctx, t);
+  ctx.translate(face.cx, face.cy);
+  ctx.rotate(face.angle);
+  fn(ctx, face);
   ctx.restore();
+}
+
+function buildPoseFromFace(face) {
+  const { chin, le, re, nose, forehead } = face.pts;
+  const shoulderY = chin.y + face.faceH * 0.28;
+  const shoulderSpan = face.faceW * 0.95;
+  const lSh = { x: face.cx - shoulderSpan * 0.5, y: shoulderY };
+  const rSh = { x: face.cx + shoulderSpan * 0.5, y: shoulderY };
+  const bodyW = shoulderSpan * 2;
+  return {
+    cx: face.cx,
+    cy: shoulderY + face.faceH * 0.35,
+    angle: face.angle,
+    scale: face.scale,
+    bodyW,
+    bodyH: face.faceH * 2.4,
+    synthetic: true,
+    pts: { nose, lSh, rSh, forehead, le, re, chin }
+  };
+}
+
+function resolvePose(pose, face) {
+  if (pose) return pose;
+  if (face) return buildPoseFromFace(face);
+  return null;
 }
 
 function drawNeonPath(ctx, pathFn, color, width = 2.5, blur = 14) {
@@ -233,7 +262,7 @@ function drawEmojiSticker(ctx, x, y, emoji, size, angle = 0) {
 
 function fxHeian(ctx, face, w, h) {
   drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 280);
-  withTransform(ctx, face, (c, f) => {
+  withFaceTransform(ctx, face, (c, f) => {
     const hw = f.faceW * 0.55;
     const hh = f.faceH * 0.32;
     c.fillStyle = "rgba(60,20,90,0.55)";
@@ -282,7 +311,7 @@ function fxSalaryman(ctx, face, w, h) {
 
 function fxFaceOval(ctx, face, w, h) {
   drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 160);
-  withTransform(ctx, face, (c, f) => {
+  withFaceTransform(ctx, face, (c, f) => {
     c.strokeStyle = "rgba(184,255,46,0.5)";
     c.lineWidth = 2;
     c.setLineDash([6, 5]);
@@ -297,9 +326,12 @@ function fxUffun(ctx, face, pose, w, h) {
   if (face) {
     drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 320);
     const { chin, forehead } = face.pts;
-    drawEmojiSticker(ctx, forehead.x + face.faceW * 0.35, forehead.y - face.faceH * 0.15, "❤️", face.faceW * 0.35, face.angle);
-    if (pose?.pts?.rW || pose?.pts?.lW) {
-      const wrist = pose.pts.rW || pose.pts.lW;
+    const hx = forehead.x + Math.cos(face.angle - Math.PI / 2) * face.faceW * 0.28;
+    const hy = forehead.y + Math.sin(face.angle - Math.PI / 2) * face.faceW * 0.28;
+    drawEmojiSticker(ctx, hx, hy, "❤️", face.faceW * 0.32, face.angle);
+    const resolved = resolvePose(pose, face);
+    if (resolved?.pts?.rW || resolved?.pts?.lW) {
+      const wrist = resolved.pts.rW || resolved.pts.lW;
       ctx.save();
       ctx.strokeStyle = "rgba(255,120,180,0.85)";
       ctx.lineWidth = 2;
@@ -319,12 +351,15 @@ function fxUffun(ctx, face, pose, w, h) {
 }
 
 function fxCockroach(ctx, face, pose, w, h) {
+  const resolved = resolvePose(pose, face);
   if (face) drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 30);
-  if (pose?.pts) {
-    const { lW, rW, nose } = pose.pts;
-    const roachX = Math.min(lW?.x ?? nose.x, rW?.x ?? nose.x) - pose.bodyW * 0.15;
-    const roachY = ((lW?.y ?? 0) + (rW?.y ?? 0)) / 2 || nose.y;
-    drawEmojiSticker(ctx, roachX, roachY, "🪳", pose.bodyW * 0.18, 0);
+  if (resolved?.pts) {
+    const { lW, rW, nose } = resolved.pts;
+    const refX = nose?.x ?? resolved.cx;
+    const refY = nose?.y ?? resolved.cy;
+    const roachX = Math.min(lW?.x ?? refX, rW?.x ?? refX) - resolved.bodyW * 0.12;
+    const roachY = lW && rW ? (lW.y + rW.y) / 2 : refY;
+    drawEmojiSticker(ctx, roachX, roachY, "🪳", resolved.bodyW * 0.16, 0);
     for (const wpt of [lW, rW].filter(Boolean)) {
       ctx.save();
       ctx.strokeStyle = "rgba(255,200,46,0.7)";
@@ -339,9 +374,11 @@ function fxCockroach(ctx, face, pose, w, h) {
 }
 
 function fxDespair(ctx, face, pose, w, h) {
-  if (pose?.pts) {
-    const { lW, rW, nose } = pose.pts;
-    if (lW && rW && nose) {
+  const resolved = resolvePose(pose, face);
+  if (resolved?.pts) {
+    const { lW, rW, nose } = resolved.pts;
+    const head = nose || face?.pts?.nose;
+    if (lW && rW && head) {
       ctx.save();
       ctx.strokeStyle = "rgba(100,120,255,0.75)";
       ctx.lineWidth = 3;
@@ -349,7 +386,7 @@ function fxDespair(ctx, face, pose, w, h) {
       ctx.shadowBlur = 12;
       ctx.beginPath();
       ctx.moveTo(lW.x, lW.y);
-      ctx.lineTo(nose.x - pose.bodyW * 0.08, nose.y);
+      ctx.lineTo(head.x - resolved.bodyW * 0.06, head.y);
       ctx.lineTo(rW.x, rW.y);
       ctx.stroke();
       ctx.restore();
@@ -358,12 +395,15 @@ function fxDespair(ctx, face, pose, w, h) {
   if (face) drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 240);
 }
 
-function fxPressMic(ctx, pose, w, h) {
-  if (!pose?.pts?.nose) return;
-  const { nose, lSh, rSh } = pose.pts;
+function fxPressMic(ctx, pose, face, w, h) {
+  const resolved = resolvePose(pose, face);
+  if (!resolved?.pts) return;
+  const nose = resolved.pts.nose || face?.pts?.nose;
+  const { lSh, rSh } = resolved.pts;
+  if (!nose) return;
   const micX = nose.x;
-  const micTop = nose.y + pose.bodyH * 0.08;
-  const micBot = Math.min(h * 0.92, micTop + pose.bodyH * 0.55);
+  const micTop = nose.y + resolved.bodyH * 0.06;
+  const micBot = Math.min(h * 0.92, micTop + resolved.bodyH * 0.45);
   ctx.save();
   ctx.strokeStyle = "rgba(180,180,200,0.85)";
   ctx.lineWidth = 4;
@@ -374,7 +414,7 @@ function fxPressMic(ctx, pose, w, h) {
   ctx.lineTo(micX, micBot);
   ctx.stroke();
   ctx.beginPath();
-  ctx.arc(micX, micTop, pose.bodyW * 0.07, 0, Math.PI * 2);
+  ctx.arc(micX, micTop, resolved.bodyW * 0.06, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(40,40,50,0.7)";
   ctx.fill();
   ctx.stroke();
@@ -387,7 +427,7 @@ function fxPressMic(ctx, pose, w, h) {
     ctx.beginPath();
     ctx.moveTo(lSh.x, lSh.y);
     ctx.lineTo(rSh.x, rSh.y);
-    ctx.lineTo(micX, micTop + pose.bodyH * 0.2);
+    ctx.lineTo(micX, micTop + resolved.bodyH * 0.15);
     ctx.stroke();
     ctx.restore();
   }
@@ -555,6 +595,7 @@ function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
 
   const face = faces[0] ?? null;
   const pose = poses[0] ?? null;
+  const poseOrSynth = resolvePose(pose, face);
   let tracked = false;
 
   switch (guide) {
@@ -568,28 +609,28 @@ function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
       if (face) { fxSalaryman(ctx, face, w, h); tracked = true; }
       break;
     case "uffun":
-      if (face || pose) { fxUffun(ctx, face, pose, w, h); tracked = true; }
+      if (face || poseOrSynth) { fxUffun(ctx, face, poseOrSynth, w, h); tracked = true; }
       break;
     case "cockroach":
-      if (face || pose) { fxCockroach(ctx, face, pose, w, h); tracked = true; }
+      if (face || poseOrSynth) { fxCockroach(ctx, face, poseOrSynth, w, h); tracked = true; }
       break;
     case "despair":
-      if (face || pose) { fxDespair(ctx, face, pose, w, h); tracked = true; }
+      if (face || poseOrSynth) { fxDespair(ctx, face, poseOrSynth, w, h); tracked = true; }
       break;
     case "press-mic":
-      if (pose) { fxPressMic(ctx, pose, w, h); fxPoseBody(ctx, pose, w, h, 45); tracked = true; }
+      if (poseOrSynth || face) { fxPressMic(ctx, pose, face, w, h); if (poseOrSynth) fxPoseBody(ctx, poseOrSynth, w, h, 45); tracked = true; }
       break;
     case "abnormal-run":
-      if (pose) { fxAbnormalRun(ctx, pose, w, h); tracked = true; }
+      if (poseOrSynth) { fxAbnormalRun(ctx, poseOrSynth, w, h); tracked = true; }
       break;
     case "otaku-romance":
-      if (pose) { fxOtakuRomance(ctx, pose, w, h); tracked = true; }
+      if (poseOrSynth) { fxOtakuRomance(ctx, poseOrSynth, w, h); tracked = true; }
       break;
     case "hand-bra":
-      if (pose) { fxHandBra(ctx, pose, w, h); tracked = true; }
+      if (poseOrSynth) { fxHandBra(ctx, poseOrSynth, w, h); tracked = true; }
       break;
     case "titanic":
-      if (face || pose) { fxTitanic(ctx, face, pose, w, h); tracked = true; }
+      if (face || poseOrSynth) { fxTitanic(ctx, face, poseOrSynth, w, h); tracked = true; }
       break;
     case "duo-split":
       if (faces.length) { fxDuoFaces(ctx, faces, w, h, "😂", "😭"); tracked = true; }
@@ -702,12 +743,16 @@ function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
       break;
     default:
       if (face) { fxFaceOval(ctx, face, w, h); tracked = true; }
-      else if (pose) { fxPoseBody(ctx, pose, w, h); tracked = true; }
+      else if (poseOrSynth) { fxPoseBody(ctx, poseOrSynth, w, h); tracked = true; }
   }
 
   const hint = level.players >= 2
     ? (tracked ? "👥 2人検知中！" : "👥 2人を画面に入れて！")
-    : (tracked ? "✨ AR追従中" : "顔・体を枠に入れて！");
+    : (tracked
+      ? (level.type === "pose" || level.type === "both" ? "✨ AR追従中（上半身を映すと精度UP）" : "✨ AR追従中")
+      : (level.type === "pose" || level.type === "both"
+        ? "少し離れて上半身〜腰を映して！"
+        : "顔を枠に入れて！"));
   drawBottomHint(ctx, hint, w, h);
 
   return tracked;
