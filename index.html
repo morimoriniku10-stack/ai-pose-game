@@ -825,10 +825,14 @@ let poseInitPromise = null;
 const FACE_MODELS = [
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 ];
-const POSE_MODELS = [
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker/float16/1/pose_landmarker.task",
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task"
-];
+const POSE_MODEL_LITE =
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task";
+const POSE_MODEL_FULL =
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker/float16/1/pose_landmarker.task";
+
+function getPoseModelPaths() {
+  return isMobile() ? [POSE_MODEL_LITE] : [POSE_MODEL_LITE, POSE_MODEL_FULL];
+}
 
 function isInAppBrowser() {
   const ua = navigator.userAgent;
@@ -972,11 +976,11 @@ async function createFaceLandmarker(vision, delegate, modelPath) {
   });
 }
 
-async function createPoseLandmarker(vision, delegate, modelPath) {
+async function createPoseLandmarker(vision, delegate, modelPath, numPoses = 2) {
   return window.MP.PoseLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: modelPath, delegate },
     runningMode: "VIDEO",
-    numPoses: 2,
+    numPoses,
     minPoseDetectionConfidence: 0.35,
     minPosePresenceConfidence: 0.35,
     minTrackingConfidence: 0.35
@@ -1001,15 +1005,19 @@ async function loadFaceLandmarker(vision, delegate) {
 
 async function loadPoseLandmarker(vision, delegate) {
   let lastError = null;
-  for (const modelPath of POSE_MODELS) {
-    try {
-      return await withRetry(
-        `PoseLandmarker/${delegate}/${modelPath}`,
-        () => createPoseLandmarker(vision, delegate, modelPath)
-      );
-    } catch (err) {
-      lastError = err;
-      console.warn("[AI] ポーズモデル失敗:", modelPath, err);
+  const poseCounts = isMobile() ? [1, 2] : [2, 1];
+  for (const modelPath of getPoseModelPaths()) {
+    for (const numPoses of poseCounts) {
+      try {
+        return await withRetry(
+          `PoseLandmarker/${delegate}/${numPoses}/${modelPath}`,
+          () => createPoseLandmarker(vision, delegate, modelPath, numPoses),
+          2
+        );
+      } catch (err) {
+        lastError = err;
+        console.warn("[AI] ポーズモデル失敗:", numPoses, modelPath, err);
+      }
     }
   }
   throw lastError || new Error("ポーズモデルの読み込みに失敗しました");
@@ -1076,16 +1084,17 @@ async function ensureDetectorForLevel(level) {
   try {
     const needsFace = level.type === "face" || level.type === "both";
     const needsPose = level.type === "pose" || level.type === "both";
-    if (needsFace && !(await ensureFaceLandmarker())) return false;
-    if (needsPose && !(await ensurePoseLandmarker())) return false;
+    if (needsFace) await ensureFaceLandmarker();
+    if (needsPose) await ensurePoseLandmarker();
     return true;
   } catch (err) {
     console.error("[AI] モデル読込失敗:", err);
+    const needsPose = level.type === "pose" || level.type === "both";
     showCompatibilityResult({
       ok: false,
       issues: [{
         blocking: true,
-        title: "AIモデルの読み込みに失敗しました",
+        title: needsPose ? "ポーズAIの読み込みに失敗しました" : "AIモデルの読み込みに失敗しました",
         message: "Wi-Fiで接続し、ページを再読み込みしてお試しください。低電力モードをオフにすると改善することがあります。"
       }]
     });
@@ -1094,6 +1103,13 @@ async function ensureDetectorForLevel(level) {
     showLoading(false);
     setLoadingText("AI INITIALIZING...");
   }
+}
+
+function preloadPoseModelDelayed() {
+  if (poseLandmarker || poseInitPromise) return;
+  setTimeout(() => {
+    ensurePoseLandmarker().catch(err => console.warn("[AI] ポーズ先読み失敗:", err));
+  }, isMobile() ? 3000 : 1500);
 }
 
 function setLoadingText(text) {
@@ -1595,13 +1611,11 @@ async function startLevel(index) {
   setLoadingText(loadingMsg);
   const ready = await ensureDetectorForLevel(level);
   if (!ready) {
-    alert("レベルの準備に失敗しました。Wi-Fi接続を確認して、もう一度お試しください。");
+    alert(`LEVEL ${level.id} の準備に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`);
     return false;
   }
 
-  if (level.id <= 3 && !poseLandmarker) {
-    ensurePoseLandmarker().catch(() => {});
-  }
+  preloadPoseModelDelayed();
 
   GameState.isRunning = true;
   GameState.animFrameId = requestAnimationFrame(detectionLoop);

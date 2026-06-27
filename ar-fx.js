@@ -59,28 +59,40 @@ function smoothPose(idx, raw, alpha = 0.32) {
   return s;
 }
 
+function normalizeAngle(a) {
+  while (a > Math.PI / 2) a -= Math.PI;
+  while (a < -Math.PI / 2) a += Math.PI;
+  return a;
+}
+
 function analyzeFace(landmarks, w, h) {
-  const le = fxPt(landmarks[33], w, h);
-  const re = fxPt(landmarks[263], w, h);
+  const aLe = fxPt(landmarks[33], w, h);
+  const aRe = fxPt(landmarks[263], w, h);
   const forehead = fxPt(landmarks[10], w, h);
   const chin = fxPt(landmarks[152], w, h);
   const nose = fxPt(landmarks[1], w, h);
   const mouthL = fxPt(landmarks[61], w, h);
   const mouthR = fxPt(landmarks[291], w, h);
-  const eyeMid = fxMid(le, re);
-  const cx = fxLerp(eyeMid.x, nose.x, 0.35);
-  const cy = fxLerp(eyeMid.y, (forehead.y + chin.y) / 2, 0.2);
-  const eyeDist = Math.max(fxDist(le, re), 24);
-  const faceH = Math.max(fxDist(forehead, chin), eyeDist * 1.1);
-  const faceW = eyeDist * 1.45;
-  const angle = Math.atan2(re.y - le.y, re.x - le.x);
+
+  const [screenLe, screenRe] = aLe.x < aRe.x ? [aLe, aRe] : [aRe, aLe];
+  const eyeMid = fxMid(screenLe, screenRe);
+  const cx = fxLerp(nose.x, eyeMid.x, 0.2);
+  const cy = fxLerp(nose.y, fxMid(forehead, chin).y, 0.1);
+
+  const eyeDist = Math.max(fxDist(screenLe, screenRe), 22);
+  const faceH = Math.max(fxDist(forehead, chin), eyeDist * 1.08);
+  const faceW = eyeDist * 1.38;
+  const angle = normalizeAngle(Math.atan2(screenRe.y - screenLe.y, screenRe.x - screenLe.x));
   const depth = nose.z ?? 0;
-  const scale = eyeDist / 90;
 
   return {
-    cx, cy, angle, scale, faceW, faceH, depth,
+    cx, cy, angle, scale: 1, faceW, faceH, depth,
     lm: landmarks,
-    pts: { le, re, forehead, chin, nose, mouthL, mouthR, eyeMid }
+    pts: {
+      le: screenLe, re: screenRe,
+      aLe, aRe,
+      forehead, chin, nose, mouthL, mouthR, eyeMid
+    }
   };
 }
 
@@ -129,21 +141,23 @@ function withFaceTransform(ctx, face, fn) {
 }
 
 function buildPoseFromFace(face) {
-  const { chin, le, re, nose, forehead } = face.pts;
-  const shoulderY = chin.y + face.faceH * 0.28;
-  const shoulderSpan = face.faceW * 0.95;
-  const lSh = { x: face.cx - shoulderSpan * 0.5, y: shoulderY };
-  const rSh = { x: face.cx + shoulderSpan * 0.5, y: shoulderY };
-  const bodyW = shoulderSpan * 2;
+  const { chin, nose, forehead } = face.pts;
+  const shoulderY = chin.y + face.faceH * 0.22;
+  const half = face.faceW * 0.52;
+  const cos = Math.cos(face.angle);
+  const sin = Math.sin(face.angle);
+  const lSh = { x: face.cx - half * cos, y: shoulderY - half * sin };
+  const rSh = { x: face.cx + half * cos, y: shoulderY + half * sin };
+  const bodyW = half * 2.1;
   return {
     cx: face.cx,
-    cy: shoulderY + face.faceH * 0.35,
+    cy: shoulderY + face.faceH * 0.28,
     angle: face.angle,
-    scale: face.scale,
+    scale: 1,
     bodyW,
-    bodyH: face.faceH * 2.4,
+    bodyH: face.faceH * 2.2,
     synthetic: true,
-    pts: { nose, lSh, rSh, forehead, le, re, chin }
+    pts: { nose, lSh, rSh, forehead, chin }
   };
 }
 
@@ -189,26 +203,63 @@ function faceOvalPath(ctx, landmarks, w, h) {
   ctx.closePath();
 }
 
+function drawFaceLockUI(ctx, face, w, h) {
+  const pulse = 0.65 + 0.35 * Math.sin(Date.now() / 180);
+  const hw = face.faceW * 0.56;
+  const hh = face.faceH * 0.62;
+  const x0 = face.cx - hw;
+  const y0 = face.cy - hh * 0.85;
+  const x1 = face.cx + hw;
+  const y1 = face.cy + hh * 0.95;
+  const len = Math.min(hw * 0.22, 28);
+
+  ctx.save();
+  ctx.strokeStyle = `rgba(0,245,255,${0.75 * pulse})`;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = "rgba(0,245,255,0.8)";
+  ctx.shadowBlur = 10;
+
+  const corner = (sx, sy, dx, dy) => {
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx + dx * len, sy);
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx, sy + dy * len);
+    ctx.stroke();
+  };
+  corner(x0, y0, 1, 1);
+  corner(x1, y0, -1, 1);
+  corner(x0, y1, 1, -1);
+  corner(x1, y1, -1, -1);
+
+  ctx.font = "bold 11px 'Share Tech Mono', monospace";
+  ctx.fillStyle = `rgba(184,255,46,${0.9 * pulse})`;
+  ctx.textAlign = "center";
+  ctx.fillText("◉ FACE LOCK", face.cx, y0 - 10);
+
+  const keyIdx = [33, 263, 1, 61, 291, 10, 152];
+  for (const idx of keyIdx) {
+    const lm = face.lm[idx];
+    if (!lm) continue;
+    const p = fxPt(lm, w, h);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(184,255,46,0.95)";
+    ctx.shadowColor = "rgba(184,255,46,0.9)";
+    ctx.shadowBlur = 8;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawFaceWireMesh(ctx, landmarks, w, h, hue = 180) {
-  const mainColor = `hsla(${hue},100%,65%,0.88)`;
-  drawNeonPath(ctx, c => faceOvalPath(c, landmarks, w, h), mainColor, 2.5, 18);
+  const mainColor = `hsla(${hue},100%,65%,0.92)`;
+  drawNeonPath(ctx, c => faceOvalPath(c, landmarks, w, h), mainColor, 3, 20);
 
   ctx.save();
-  ctx.globalAlpha = 0.3;
-  ctx.translate(-1.2, 0.6);
-  drawNeonPath(ctx, c => faceOvalPath(c, landmarks, w, h), "rgba(255,45,120,0.55)", 1.2, 6);
-  ctx.restore();
-
-  ctx.save();
-  ctx.globalAlpha = 0.3;
-  ctx.translate(1.2, -0.4);
-  drawNeonPath(ctx, c => faceOvalPath(c, landmarks, w, h), "rgba(0,245,255,0.55)", 1.2, 6);
-  ctx.restore();
-
-  ctx.save();
-  ctx.globalAlpha = 0.15;
+  ctx.globalAlpha = 0.12;
   faceOvalPath(ctx, landmarks, w, h);
-  ctx.fillStyle = `hsla(${hue},100%,60%,0.3)`;
+  ctx.fillStyle = `hsla(${hue},100%,60%,0.35)`;
   ctx.fill();
   ctx.restore();
 
@@ -216,8 +267,8 @@ function drawFaceWireMesh(ctx, landmarks, w, h, hue = 180) {
   const re = fxPt(landmarks[263], w, h);
   const nose = fxPt(landmarks[1], w, h);
   ctx.save();
-  ctx.strokeStyle = "rgba(0,245,255,0.3)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(0,245,255,0.45)";
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(le.x, le.y);
   ctx.lineTo(nose.x, nose.y);
@@ -228,7 +279,10 @@ function drawFaceWireMesh(ctx, landmarks, w, h, hue = 180) {
 
 function drawFaceWireMeshWithScan(ctx, landmarks, w, h, face, hue) {
   drawFaceWireMesh(ctx, landmarks, w, h, hue);
-  if (face) drawScanSweep(ctx, face);
+  if (face) {
+    drawScanSweep(ctx, face);
+    drawFaceLockUI(ctx, face, w, h);
+  }
 }
 
 function drawStickerText(ctx, x, y, text, size, color, angle = 0) {
@@ -263,50 +317,46 @@ function drawEmojiSticker(ctx, x, y, emoji, size, angle = 0) {
 function fxHeian(ctx, face, w, h) {
   drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 280);
   withFaceTransform(ctx, face, (c, f) => {
-    const hw = f.faceW * 0.55;
-    const hh = f.faceH * 0.32;
-    c.fillStyle = "rgba(60,20,90,0.55)";
-    c.strokeStyle = "rgba(255,220,120,0.9)";
+    const hw = f.faceW * 0.52;
+    const hh = f.faceH * 0.28;
+    const topY = (f.pts.forehead.y - f.cy) - f.faceH * 0.1;
+    c.fillStyle = "rgba(60,20,90,0.6)";
+    c.strokeStyle = "rgba(255,220,120,0.92)";
     c.lineWidth = 2.5;
-    c.shadowColor = "rgba(255,200,80,0.8)";
-    c.shadowBlur = 18;
+    c.shadowColor = "rgba(255,200,80,0.85)";
+    c.shadowBlur = 16;
     c.beginPath();
-    c.ellipse(0, -f.faceH * 0.62, hw, hh, 0, Math.PI, 0);
-    c.lineTo(hw * 0.85, -f.faceH * 0.35);
-    c.quadraticCurveTo(0, -f.faceH * 0.28, -hw * 0.85, -f.faceH * 0.35);
+    c.ellipse(0, topY, hw, hh, 0, Math.PI, 0);
+    c.lineTo(hw * 0.82, topY + hh * 0.85);
+    c.quadraticCurveTo(0, topY + hh * 1.05, -hw * 0.82, topY + hh * 0.85);
     c.closePath();
     c.fill();
-    c.stroke();
-    c.beginPath();
-    c.moveTo(-hw * 0.15, -f.faceH * 0.35);
-    c.lineTo(hw * 0.15, -f.faceH * 0.35);
-    c.strokeStyle = "rgba(255,220,120,0.6)";
     c.stroke();
   });
 }
 
 function fxSalaryman(ctx, face, w, h) {
   drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 0);
-  const { le, re, mouthL, mouthR, chin } = face.pts;
+  const { aLe, aRe, mouthL, mouthR, chin } = face.pts;
   const mouthMid = fxMid(mouthL, mouthR);
-  const eyeR = face.faceW * 0.11;
-  for (const eye of [le, re]) {
+  const eyeR = face.faceW * 0.1;
+  for (const eye of [aLe, aRe]) {
     ctx.save();
     ctx.beginPath();
     ctx.arc(eye.x, eye.y, eyeR, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = 2;
     ctx.shadowColor = "rgba(255,80,80,0.9)";
     ctx.shadowBlur = 14;
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(eye.x, eye.y, eyeR * 0.35, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(20,20,30,0.85)";
+    ctx.arc(eye.x, eye.y - eyeR * 0.15, eyeR * 0.32, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(15,15,25,0.9)";
     ctx.fill();
     ctx.restore();
   }
-  drawStickerText(ctx, mouthMid.x, mouthMid.y + face.faceH * 0.06, "へ", face.faceW * 0.28, "rgba(255,90,90,0.95)", face.angle * 0.3);
-  drawStickerText(ctx, chin.x, chin.y + face.faceH * 0.12, "限界", face.faceW * 0.16, "rgba(255,200,46,0.8)", face.angle);
+  drawStickerText(ctx, mouthMid.x, mouthMid.y + face.faceH * 0.05, "へ", face.faceW * 0.26, "rgba(255,90,90,0.95)", face.angle * 0.5);
+  drawStickerText(ctx, chin.x, chin.y + face.faceH * 0.1, "限界", face.faceW * 0.14, "rgba(255,200,46,0.85)", face.angle * 0.5);
 }
 
 function fxFaceOval(ctx, face, w, h) {
@@ -326,9 +376,11 @@ function fxUffun(ctx, face, pose, w, h) {
   if (face) {
     drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 320);
     const { chin, forehead } = face.pts;
-    const hx = forehead.x + Math.cos(face.angle - Math.PI / 2) * face.faceW * 0.28;
-    const hy = forehead.y + Math.sin(face.angle - Math.PI / 2) * face.faceW * 0.28;
-    drawEmojiSticker(ctx, hx, hy, "❤️", face.faceW * 0.32, face.angle);
+    const cos = Math.cos(face.angle);
+    const sin = Math.sin(face.angle);
+    const hx = forehead.x + sin * face.faceW * 0.22;
+    const hy = forehead.y - cos * face.faceW * 0.22;
+    drawEmojiSticker(ctx, hx, hy, "❤️", face.faceW * 0.3, face.angle);
     const resolved = resolvePose(pose, face);
     if (resolved?.pts?.rW || resolved?.pts?.lW) {
       const wrist = resolved.pts.rW || resolved.pts.lW;
@@ -618,7 +670,11 @@ function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
       if (face || poseOrSynth) { fxDespair(ctx, face, poseOrSynth, w, h); tracked = true; }
       break;
     case "press-mic":
-      if (poseOrSynth || face) { fxPressMic(ctx, pose, face, w, h); if (poseOrSynth) fxPoseBody(ctx, poseOrSynth, w, h, 45); tracked = true; }
+      if (face || poseOrSynth) {
+        fxPressMic(ctx, pose, face, w, h);
+        if (poseOrSynth) fxPoseBody(ctx, poseOrSynth, w, h, 45);
+        tracked = true;
+      }
       break;
     case "abnormal-run":
       if (poseOrSynth) { fxAbnormalRun(ctx, poseOrSynth, w, h); tracked = true; }

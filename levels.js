@@ -38,13 +38,13 @@ const LEVELS = [
     clearThreshold: 0.58, holdFrames: 14
   },
   {
-    id: 5, type: "both", players: 1,
+    id: 5, type: "face", players: 1,
     title: "1ミリも反省していない謝罪会見", emoji: "🎤",
-    hint: "少し離れて上半身を映し、深くお辞儀！",
-    detector: "detectApologyBow",
+    hint: "深くお辞儀！顔を下に向けてキープ",
+    detector: "detectApologyBowFace",
     guide: "press-mic",
     shareText: "絶対に反省していない謝罪会見に成功しました。 #AIシルエットマッチ",
-    clearThreshold: 0.42, holdFrames: 14
+    clearThreshold: 0.40, holdFrames: 14
   },
   {
     id: 6, type: "both", players: 1,
@@ -331,37 +331,32 @@ const DETECTORS = {
     return despairFaceScore(result, 0);
   },
 
+  detectApologyBowFace(result) {
+    if (!result?.faceLandmarks?.length) return 0;
+    const lm = result.faceLandmarks[0];
+    const forehead = lm[10], chin = lm[152], nose = lm[1];
+    if (!forehead || !chin || !nose) return 0;
+    const span = Math.max(chin.y - forehead.y, 0.04);
+    const noseRatio = (nose.y - forehead.y) / span;
+    const headDown = clamp01((noseRatio - 0.42) * 3.0);
+    const chinUp = clamp01((chin.y - nose.y) / span * 2);
+    return blendScore(headDown, chinUp * 0.6);
+  },
+
   detectApologyBow({ face, pose }) {
     let score = 0;
-
+    if (face?.faceLandmarks?.length) {
+      score = DETECTORS.detectApologyBowFace(face);
+    }
     if (pose?.landmarks?.length) {
       const nose = poseLm(pose, 0, 0);
       const lSh = poseLm(pose, 0, 11);
       const rSh = poseLm(pose, 0, 12);
-      const lW = poseLm(pose, 0, 15);
-      const rW = poseLm(pose, 0, 16);
       if (nose && lSh && rSh) {
         const shoulderY = (lSh.y + rSh.y) / 2;
-        const headDrop = clamp01((nose.y - shoulderY + 0.02) * 4.5);
-        let hands = 0;
-        if (lW && rW) {
-          hands = clamp01(1 - lmDist(lW, rW) * 3.5) * clamp01((Math.max(lW.y, rW.y) - shoulderY + 0.04) * 3);
-        }
-        score = Math.max(headDrop, hands);
+        score = Math.max(score, clamp01((nose.y - shoulderY + 0.02) * 4));
       }
     }
-
-    if (face?.faceLandmarks?.length) {
-      const lm = face.faceLandmarks[0];
-      const forehead = lm[10], chin = lm[152], nose = lm[1];
-      if (forehead && chin && nose) {
-        const span = Math.max(chin.y - forehead.y, 0.05);
-        const noseRatio = (nose.y - forehead.y) / span;
-        const headDown = clamp01((noseRatio - 0.48) * 3.5);
-        score = Math.max(score, headDown);
-      }
-    }
-
     return score;
   },
 
