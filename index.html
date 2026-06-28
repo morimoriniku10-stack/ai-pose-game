@@ -7,9 +7,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="カメラでポーズを真似してクリアするAIゲーム" />
-  <meta property="og:title" content="POSE" />
-  <meta property="og:description" content="カメラでポーズを真似してクリアするAIゲーム" />
+  <meta property="og:title" content="POSE — AIポーズゲーム" />
+  <meta property="og:description" content="カメラの前でポーズを決めるだけ！AIがリアルタイム判定。友達とシェアして遊ぼう。" />
   <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="POSE" />
+  <meta property="og:locale" content="ja_JP" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="POSE — AIポーズゲーム" />
+  <meta name="twitter:description" content="カメラの前でポーズを決めるだけ！AIがリアルタイム判定。" />
 
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
@@ -687,9 +692,111 @@
       from { opacity: 1; transform: translate(0,0) scale(1); }
       to   { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.3); }
     }
+
+    .inapp-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(5, 5, 12, 0.92);
+      backdrop-filter: blur(8px);
+    }
+
+    .inapp-gate.hidden { display: none; }
+
+    .inapp-card {
+      width: min(100%, 360px);
+      padding: 28px 22px;
+      border-radius: 20px;
+      background: linear-gradient(160deg, #1a1a2e 0%, #12121f 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    .inapp-emoji { font-size: 48px; margin-bottom: 12px; }
+
+    .inapp-card h2 {
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      color: #fff;
+    }
+
+    .inapp-card p {
+      font-size: 14px;
+      line-height: 1.65;
+      color: #aaa;
+      margin-bottom: 20px;
+    }
+
+    .inapp-card p strong { color: #e0e0ff; }
+
+    .inapp-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .inapp-actions .btn { width: 100%; }
+
+    .inapp-steps {
+      text-align: left;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .inapp-steps-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    .inapp-steps ol {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: #ccc;
+    }
+
+    .inapp-copy-ok {
+      font-size: 12px;
+      color: #6ee7a0;
+      margin-top: 8px;
+      min-height: 18px;
+    }
   </style>
 </head>
 <body>
+
+<div id="inapp-gate" class="inapp-gate hidden" role="dialog" aria-labelledby="inapp-title" aria-modal="true">
+  <div class="inapp-card">
+    <div class="inapp-emoji">📸</div>
+    <h2 id="inapp-title">POSE を始めるには</h2>
+    <p id="inapp-message">
+      <span id="inapp-app-name">SNS</span>のアプリ内ブラウザではカメラが使えません。<br>
+      <strong>Safari</strong> または <strong>Chrome</strong> で開いてください。
+    </p>
+    <div class="inapp-actions">
+      <button type="button" class="btn btn-primary" id="open-external-btn">Safari / Chrome で開く</button>
+      <button type="button" class="btn btn-secondary" id="copy-link-btn">リンクをコピー</button>
+    </div>
+    <div class="inapp-steps">
+      <div class="inapp-steps-title">手動で開く場合</div>
+      <ol id="inapp-steps-list"></ol>
+    </div>
+    <p class="inapp-copy-ok" id="inapp-copy-ok" aria-live="polite"></p>
+  </div>
+</div>
 
 <div id="start-screen">
   <div class="start-card">
@@ -840,7 +947,122 @@ function isInAppBrowser() {
     || /Instagram/i.test(ua)
     || /FBAN|FBAV/i.test(ua)
     || /Twitter/i.test(ua)
-    || /MicroMessenger/i.test(ua);
+    || /MicroMessenger/i.test(ua)
+    || /TikTok|musical_ly/i.test(ua)
+    || /KAKAOTALK/i.test(ua);
+}
+
+function getInAppBrowserName() {
+  const ua = navigator.userAgent;
+  if (/Line\//i.test(ua)) return "LINE";
+  if (/Instagram/i.test(ua)) return "Instagram";
+  if (/FBAN|FBAV/i.test(ua)) return "Facebook";
+  if (/Twitter/i.test(ua)) return "X";
+  if (/MicroMessenger/i.test(ua)) return "WeChat";
+  if (/TikTok|musical_ly/i.test(ua)) return "TikTok";
+  if (/KAKAOTALK/i.test(ua)) return "KakaoTalk";
+  return "SNS";
+}
+
+function getCanonicalGameUrl() {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+function getInAppOpenSteps() {
+  const app = getInAppBrowserName();
+  if (app === "LINE") {
+    return isIOS()
+      ? [
+          "画面右上の「…」または「≡」をタップ",
+          "「Safariで開く」または「ブラウザで開く」を選択"
+        ]
+      : [
+          "画面右上の「…」をタップ",
+          "「ブラウザで開く」または「Chromeで開く」を選択"
+        ];
+  }
+  if (app === "Instagram") {
+    return [
+      "画面右上の「…」をタップ",
+      "「ブラウザで開く」を選択"
+    ];
+  }
+  if (isIOS()) {
+    return [
+      "画面下部または右上のメニュー（…）をタップ",
+      "「Safariで開く」を選択"
+    ];
+  }
+  return [
+    "画面右上のメニュー（…）をタップ",
+    "「ブラウザで開く」または「Chromeで開く」を選択"
+  ];
+}
+
+function showInAppGate() {
+  const $gate = document.getElementById("inapp-gate");
+  const $startBtn = document.getElementById("start-btn");
+  document.getElementById("inapp-app-name").textContent = getInAppBrowserName();
+  document.getElementById("inapp-steps-list").innerHTML =
+    getInAppOpenSteps().map(s => `<li>${s}</li>`).join("");
+  $gate.classList.remove("hidden");
+  $startBtn.disabled = true;
+}
+
+function hideInAppGate() {
+  document.getElementById("inapp-gate").classList.add("hidden");
+}
+
+async function copyGameLink() {
+  const url = getCanonicalGameUrl();
+  const $ok = document.getElementById("inapp-copy-ok");
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    $ok.textContent = "リンクをコピーしました。Safari / Chrome に貼り付けて開いてください。";
+  } catch {
+    $ok.textContent = `コピーできませんでした: ${url}`;
+  }
+}
+
+function openInExternalBrowser() {
+  const url = getCanonicalGameUrl();
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  if (isIOS()) {
+    setTimeout(() => {
+      window.location.href = url.replace(/^https:\/\//, "x-safari-https://");
+    }, 400);
+    return;
+  }
+
+  if (/Android/i.test(navigator.userAgent)) {
+    const path = url.replace(/^https?:\/\//, "");
+    const intent =
+      `intent://${path}#Intent;scheme=https;package=com.android.chrome;` +
+      `S.browser_fallback_url=${encodeURIComponent(url)};end`;
+    setTimeout(() => {
+      window.location.href = intent;
+    }, 400);
+  }
 }
 
 function checkCompatibility() {
@@ -867,14 +1089,6 @@ function checkCompatibility() {
       blocking: true,
       title: "カメラ非対応",
       message: "このブラウザではカメラを利用できません。"
-    });
-  }
-
-  if (isInAppBrowser()) {
-    issues.push({
-      blocking: true,
-      title: "アプリ内ブラウザでは動作しません",
-      message: "LINE・Instagram 等のアプリ内ブラウザではカメラやAIが使えないことがあります。Safari または Chrome で直接開いてください。"
     });
   }
 
@@ -972,11 +1186,11 @@ async function createFaceLandmarker(vision, delegate, modelPath) {
     baseOptions: { modelAssetPath: modelPath, delegate },
     outputFaceBlendshapes: true,
     runningMode: "VIDEO",
-    numFaces: 2
+    numFaces: 4
   });
 }
 
-async function createPoseLandmarker(vision, delegate, modelPath, numPoses = 2) {
+async function createPoseLandmarker(vision, delegate, modelPath, numPoses = 4) {
   return window.MP.PoseLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: modelPath, delegate },
     runningMode: "VIDEO",
@@ -1005,7 +1219,7 @@ async function loadFaceLandmarker(vision, delegate) {
 
 async function loadPoseLandmarker(vision, delegate) {
   let lastError = null;
-  const poseCounts = isMobile() ? [1, 2] : [2, 1];
+  const poseCounts = isMobile() ? [2, 4] : [4, 2];
   for (const modelPath of getPoseModelPaths()) {
     for (const numPoses of poseCounts) {
       try {
@@ -1294,7 +1508,7 @@ function detectionLoop() {
     const count = level.type === "face"
       ? (lastFaceResult?.faceLandmarks?.length ?? 0)
       : (lastPoseResult?.landmarks?.length ?? 0);
-    if (count < 2) confidence = Math.min(confidence, 0.35);
+    if (count < level.players) confidence = Math.min(confidence, 0.35);
   }
 
   updateGauge(confidence);
@@ -1529,7 +1743,7 @@ async function shareResult() {
 
 function getSharePayload() {
   const level = currentLevel();
-  const gameUrl = window.location.href.split("?")[0];
+  const gameUrl = getCanonicalGameUrl();
   const shareLine = level.shareText
     ? level.shareText
     : `LEVEL ${level.id}「${level.title}」${level.emoji}クリア！`;
@@ -1684,6 +1898,11 @@ function showLoading(visible) {
 }
 
 document.getElementById("start-btn").addEventListener("click", async () => {
+  if (isInAppBrowser()) {
+    showInAppGate();
+    return;
+  }
+
   const $startBtn = document.getElementById("start-btn");
   $startBtn.disabled = true;
 
@@ -1723,9 +1942,16 @@ document.getElementById("photo-lightbox").addEventListener("click", (e) => {
 document.querySelectorAll(".sns-btn").forEach(btn => {
   btn.addEventListener("click", () => shareToSNS(btn.dataset.sns));
 });
+document.getElementById("open-external-btn").addEventListener("click", openInExternalBrowser);
+document.getElementById("copy-link-btn").addEventListener("click", copyGameLink);
 
 function init() {
-  showCompatibilityResult(checkCompatibility());
+  if (isInAppBrowser()) {
+    showInAppGate();
+  } else {
+    hideInAppGate();
+    showCompatibilityResult(checkCompatibility());
+  }
   preloadMediaPipeLibrary();
   console.log("[App] 初期化完了 — STARTボタン待機中");
 }
