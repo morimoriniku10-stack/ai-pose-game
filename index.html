@@ -744,6 +744,13 @@
 
     .inapp-actions .btn { width: 100%; }
 
+    .inapp-open-link {
+      display: block;
+      text-decoration: none;
+      text-align: center;
+      box-sizing: border-box;
+    }
+
     .inapp-steps {
       text-align: left;
       padding: 14px 16px;
@@ -786,10 +793,7 @@
       <span id="inapp-app-name">SNS</span>のアプリ内ブラウザではカメラが使えません。<br>
       <strong>Safari</strong> または <strong>Chrome</strong> で開いてください。
     </p>
-    <div class="inapp-actions">
-      <button type="button" class="btn btn-primary" id="open-external-btn">Safari / Chrome で開く</button>
-      <button type="button" class="btn btn-secondary" id="copy-link-btn">リンクをコピー</button>
-    </div>
+    <div class="inapp-actions" id="inapp-actions"></div>
     <div class="inapp-steps">
       <div class="inapp-steps-title">手動で開く場合</div>
       <ol id="inapp-steps-list"></ol>
@@ -949,7 +953,8 @@ function isInAppBrowser() {
     || /Twitter/i.test(ua)
     || /MicroMessenger/i.test(ua)
     || /TikTok|musical_ly/i.test(ua)
-    || /KAKAOTALK/i.test(ua);
+    || /KAKAOTALK/i.test(ua)
+    || /Threads/i.test(ua);
 }
 
 function getInAppBrowserName() {
@@ -961,7 +966,109 @@ function getInAppBrowserName() {
   if (/MicroMessenger/i.test(ua)) return "WeChat";
   if (/TikTok|musical_ly/i.test(ua)) return "TikTok";
   if (/KAKAOTALK/i.test(ua)) return "KakaoTalk";
+  if (/Threads/i.test(ua)) return "Threads";
   return "SNS";
+}
+
+function appendQueryParam(url, key, value) {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}${key}=${encodeURIComponent(value)}`;
+}
+
+function getShareGameUrl() {
+  return appendQueryParam(getCanonicalGameUrl(), "openExternalBrowser", "1");
+}
+
+function getEscapeUrls() {
+  const url = getCanonicalGameUrl();
+  const lineUrl = getShareGameUrl();
+  const app = getInAppBrowserName();
+  const links = [];
+
+  if (app === "LINE") {
+    links.push({ label: "Safari / Chrome で開く", href: lineUrl, primary: true });
+  } else if (app === "KakaoTalk") {
+    links.push({
+      label: "Safari / Chrome で開く",
+      href: `kakaotalk://web/openExternal?url=${encodeURIComponent(url)}`,
+      primary: true
+    });
+    links.push({ label: "リンクで開く", href: lineUrl, primary: false });
+  } else if (app === "Instagram" || app === "Threads") {
+    if (isIOS()) {
+      links.push({
+        label: "Safari で開く",
+        href: `instagram://extbrowser/?url=${encodeURIComponent(url)}`,
+        primary: true
+      });
+    }
+    if (/Android/i.test(navigator.userAgent)) {
+      const path = url.replace(/^https?:\/\//, "");
+      links.push({
+        label: "Chrome で開く",
+        href:
+          `intent://${path}#Intent;scheme=https;action=android.intent.action.VIEW;` +
+          `category=android.intent.category.BROWSABLE;end`,
+        primary: true
+      });
+    }
+    links.push({ label: "リンクで開く", href: lineUrl, primary: false });
+  } else if (app === "Facebook") {
+    if (isIOS()) {
+      links.push({
+        label: "Safari で開く",
+        href: url.replace(/^https:\/\//, "x-safari-https://"),
+        primary: true
+      });
+    }
+    links.push({ label: "リンクで開く", href: lineUrl, primary: false });
+  } else if (/Android/i.test(navigator.userAgent)) {
+    const path = url.replace(/^https?:\/\//, "");
+    links.push({
+      label: "Chrome で開く",
+      href:
+        `intent://${path}#Intent;scheme=https;action=android.intent.action.VIEW;` +
+        `category=android.intent.category.BROWSABLE;package=com.android.chrome;` +
+        `S.browser_fallback_url=${encodeURIComponent(lineUrl)};end`,
+      primary: true
+    });
+    links.push({ label: "ブラウザで開く", href: lineUrl, primary: false });
+  } else if (isIOS()) {
+    links.push({
+      label: "Safari で開く",
+      href: url.replace(/^https:\/\//, "x-safari-https://"),
+      primary: true
+    });
+    links.push({
+      label: "Chrome で開く",
+      href: url.replace(/^https:\/\//, "googlechromes://"),
+      primary: false
+    });
+    links.push({ label: "リンクで開く", href: lineUrl, primary: false });
+  } else {
+    links.push({ label: "Safari / Chrome で開く", href: lineUrl, primary: true });
+  }
+
+  return links;
+}
+
+function renderInAppActions() {
+  const $actions = document.getElementById("inapp-actions");
+  const links = getEscapeUrls();
+
+  $actions.innerHTML = links.map((link, i) => {
+    const cls = link.primary || i === 0 ? "btn-primary" : "btn-secondary";
+    return `<a class="btn ${cls} inapp-open-link" href="${link.href}">${link.label}</a>`;
+  }).join("") +
+    `<button type="button" class="btn btn-secondary" id="copy-link-btn">リンクをコピー</button>`;
+
+  $actions.querySelectorAll(".inapp-open-link").forEach(a => {
+    a.addEventListener("click", () => {
+      document.getElementById("inapp-copy-ok").textContent =
+        "うまく開けない場合は「リンクをコピー」→ Safari / Chrome に貼り付けてください。";
+    });
+  });
+  document.getElementById("copy-link-btn").addEventListener("click", copyGameLink);
 }
 
 function getCanonicalGameUrl() {
@@ -1005,6 +1112,7 @@ function showInAppGate() {
   document.getElementById("inapp-app-name").textContent = getInAppBrowserName();
   document.getElementById("inapp-steps-list").innerHTML =
     getInAppOpenSteps().map(s => `<li>${s}</li>`).join("");
+  renderInAppActions();
   $gate.classList.remove("hidden");
   $startBtn.disabled = true;
 }
@@ -1014,7 +1122,7 @@ function hideInAppGate() {
 }
 
 async function copyGameLink() {
-  const url = getCanonicalGameUrl();
+  const url = getShareGameUrl();
   const $ok = document.getElementById("inapp-copy-ok");
   try {
     if (navigator.clipboard?.writeText) {
@@ -1030,38 +1138,9 @@ async function copyGameLink() {
       document.execCommand("copy");
       ta.remove();
     }
-    $ok.textContent = "リンクをコピーしました。Safari / Chrome に貼り付けて開いてください。";
+    $ok.textContent = "リンクをコピーしました。Safari / Chrome のアドレスバーに貼り付けて開いてください。";
   } catch {
     $ok.textContent = `コピーできませんでした: ${url}`;
-  }
-}
-
-function openInExternalBrowser() {
-  const url = getCanonicalGameUrl();
-
-  const link = document.createElement("a");
-  link.href = url;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-
-  if (isIOS()) {
-    setTimeout(() => {
-      window.location.href = url.replace(/^https:\/\//, "x-safari-https://");
-    }, 400);
-    return;
-  }
-
-  if (/Android/i.test(navigator.userAgent)) {
-    const path = url.replace(/^https?:\/\//, "");
-    const intent =
-      `intent://${path}#Intent;scheme=https;package=com.android.chrome;` +
-      `S.browser_fallback_url=${encodeURIComponent(url)};end`;
-    setTimeout(() => {
-      window.location.href = intent;
-    }, 400);
   }
 }
 
@@ -1743,7 +1822,7 @@ async function shareResult() {
 
 function getSharePayload() {
   const level = currentLevel();
-  const gameUrl = getCanonicalGameUrl();
+  const gameUrl = getShareGameUrl();
   const shareLine = level.shareText
     ? level.shareText
     : `LEVEL ${level.id}「${level.title}」${level.emoji}クリア！`;
@@ -1942,8 +2021,6 @@ document.getElementById("photo-lightbox").addEventListener("click", (e) => {
 document.querySelectorAll(".sns-btn").forEach(btn => {
   btn.addEventListener("click", () => shareToSNS(btn.dataset.sns));
 });
-document.getElementById("open-external-btn").addEventListener("click", openInExternalBrowser);
-document.getElementById("copy-link-btn").addEventListener("click", copyGameLink);
 
 function init() {
   if (isInAppBrowser()) {
