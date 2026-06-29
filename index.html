@@ -934,16 +934,26 @@ let faceInitPromise = null;
 let poseInitPromise = null;
 
 const FACE_MODELS = [
+  "/models/face_landmarker.task",
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 ];
 const POSE_MODEL_LITE =
+  "/models/pose_landmarker_lite.task";
+const POSE_MODEL_LITE_CDN =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker.task";
 const POSE_MODEL_FULL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker/float16/1/pose_landmarker.task";
 
 function getPoseModelPaths() {
-  return isMobile() ? [POSE_MODEL_LITE] : [POSE_MODEL_LITE, POSE_MODEL_FULL];
+  if (isMobile()) {
+    return [POSE_MODEL_LITE, POSE_MODEL_LITE_CDN];
+  }
+  return [POSE_MODEL_LITE, POSE_MODEL_LITE_CDN, POSE_MODEL_FULL];
 }
+
+let loadedPoseNumPoses = 0;
+let posePreloadTimer = null;
+let faceDetectErrors = 0;
 
 function isInAppBrowser() {
   const ua = navigator.userAgent;
@@ -1244,12 +1254,21 @@ async function withRetry(label, fn, retries = 3) {
   throw lastError;
 }
 
+async function resolveWasmBase() {
+  try {
+    const res = await fetch("/wasm/vision_wasm_internal.js", { method: "HEAD", cache: "no-store" });
+    if (res.ok) return "/wasm";
+  } catch {
+    /* CDN fallback */
+  }
+  return `${window.MP.CDN}/wasm`;
+}
+
 async function getVisionTask() {
   if (visionTask) return visionTask;
   await waitForMediaPipe(isMobile() ? 90000 : 60000);
 
-  // CDNからWASMを読み込む（ローカルキャッシュなし・シンプル構成）
-  const wasmBase = `${window.MP.CDN}/wasm`;
+  const wasmBase = await resolveWasmBase();
   try {
     visionTask = await window.MP.FilesetResolver.forVisionTasks(wasmBase);
     console.log("[AI] WASM 読込成功:", wasmBase);
@@ -1265,7 +1284,7 @@ async function createFaceLandmarker(vision, delegate, modelPath) {
     baseOptions: { modelAssetPath: modelPath, delegate },
     outputFaceBlendshapes: true,
     runningMode: "VIDEO",
-    numFaces: 4
+    numFaces: isMobile() ? 2 : 4
   });
 }
 
@@ -1296,17 +1315,28 @@ async function loadFaceLandmarker(vision, delegate) {
   throw lastError || new Error("顔認識モデルの読み込みに失敗しました");
 }
 
-async function loadPoseLandmarker(vision, delegate) {
+function getNumPosesForLevel(level) {
+  const players = level?.players ?? 1;
+  return Math.min(Math.max(players, 1), isMobile() ? 2 : 4);
+}
+
+async function loadPoseLandmarker(vision, delegate, minPoses = 1) {
   let lastError = null;
-  const poseCounts = isMobile() ? [2, 4] : [4, 2];
+  const tryCounts = isMobile()
+    ? [...new Set([Math.min(minPoses, 2), 1, 2])].sort((a, b) => a - b)
+    : [...new Set([minPoses, 1, 2, 4])].sort((a, b) => a - b);
+
   for (const modelPath of getPoseModelPaths()) {
-    for (const numPoses of poseCounts) {
+    for (const numPoses of tryCounts) {
+      if (numPoses < minPoses) continue;
       try {
-        return await withRetry(
+        const landmarker = await withRetry(
           `PoseLandmarker/${delegate}/${numPoses}/${modelPath}`,
           () => createPoseLandmarker(vision, delegate, modelPath, numPoses),
           2
         );
+        landmarker._numPoses = numPoses;
+        return landmarker;
       } catch (err) {
         lastError = err;
         console.warn("[AI] ポーズモデル失敗:", numPoses, modelPath, err);
@@ -1344,9 +1374,20 @@ async function ensureFaceLandmarker() {
   return faceInitPromise;
 }
 
-async function ensurePoseLandmarker() {
-  if (poseLandmarker) return true;
-  if (poseInitPromise) return poseInitPromise;
+async function ensurePoseLandmarkerForLevel(level) {
+  const needed = getNumPosesForLevel(level);
+  if (poseLandmarker && loadedPoseNumPoses >= needed) return true;
+  if (poseLandmarker && loadedPoseNumPoses < needed) {
+    releasePoseLandmarker();
+  }
+  if (poseInitPromise) {
+    try {
+      await poseInitPromise;
+    } catch {
+      /* retry below */
+    }
+    if (poseLandmarker && loadedPoseNumPoses >= needed) return true;
+  }
 
   poseInitPromise = (async () => {
     try {
@@ -1354,12 +1395,14 @@ async function ensurePoseLandmarker() {
       for (const delegate of getDelegates()) {
         try {
           setLoadingText(`ポーズモデル読込中 (${delegate})...`);
-          poseLandmarker = await loadPoseLandmarker(vision, delegate);
-          console.log(`[AI] PoseLandmarker 完了 (${delegate})`);
+          poseLandmarker = await loadPoseLandmarker(vision, delegate, needed);
+          loadedPoseNumPoses = poseLandmarker._numPoses ?? needed;
+          console.log(`[AI] PoseLandmarker 完了 (${delegate}, numPoses=${loadedPoseNumPoses})`);
           return true;
         } catch (err) {
           console.warn(`[AI] PoseLandmarker ${delegate} 失敗:`, err);
           poseLandmarker = null;
+          loadedPoseNumPoses = 0;
         }
       }
       throw new Error("ポーズモデルの読み込みに失敗しました");
@@ -1378,7 +1421,7 @@ async function ensureDetectorForLevel(level) {
     const needsFace = level.type === "face" || level.type === "both";
     const needsPose = level.type === "pose" || level.type === "both";
     if (needsFace) await ensureFaceLandmarker();
-    if (needsPose) await ensurePoseLandmarker();
+    if (needsPose) await ensurePoseLandmarkerForLevel(level);
     return true;
   } catch (err) {
     console.error("[AI] モデル読込失敗:", err);
@@ -1398,11 +1441,38 @@ async function ensureDetectorForLevel(level) {
   }
 }
 
-function preloadPoseModelDelayed() {
+function cancelPosePreload() {
+  if (posePreloadTimer) {
+    clearTimeout(posePreloadTimer);
+    posePreloadTimer = null;
+  }
+}
+
+function schedulePosePreload(currentIndex) {
+  cancelPosePreload();
   if (poseLandmarker || poseInitPromise) return;
-  setTimeout(() => {
-    ensurePoseLandmarker().catch(err => console.warn("[AI] ポーズ先読み失敗:", err));
-  }, isMobile() ? 3000 : 1500);
+
+  let nextPoseIndex = -1;
+  for (let i = currentIndex + 1; i < LEVELS.length; i++) {
+    const t = LEVELS[i].type;
+    if (t === "pose" || t === "both") {
+      nextPoseIndex = i;
+      break;
+    }
+  }
+  if (nextPoseIndex === -1) return;
+  if (nextPoseIndex - currentIndex > 2) return;
+
+  const targetLevel = LEVELS[nextPoseIndex];
+  const delay = isMobile() ? 4000 : 1500;
+
+  posePreloadTimer = setTimeout(() => {
+    posePreloadTimer = null;
+    if (!GameState.isRunning || poseLandmarker || poseInitPromise) return;
+    ensurePoseLandmarkerForLevel(targetLevel).catch(err => {
+      console.warn("[AI] ポーズ先読み失敗:", err);
+    });
+  }, delay);
 }
 
 function setLoadingText(text) {
@@ -1482,8 +1552,43 @@ function releasePoseLandmarker() {
   if (poseLandmarker) {
     try { poseLandmarker.close(); } catch (e) { /* ignore */ }
     poseLandmarker = null;
+    loadedPoseNumPoses = 0;
     poseInitPromise = null;
   }
+}
+
+function kickVideoPlayback() {
+  if (!$video.srcObject) return;
+  const playPromise = $video.play();
+  if (playPromise?.catch) playPromise.catch(() => {});
+}
+
+async function wakeCameraForLevel(forceRestart = false) {
+  lastTimestamp = -1;
+  mpFallbackMs = 0;
+
+  if (!$video.srcObject) {
+    await startCamera();
+    return;
+  }
+
+  kickVideoPlayback();
+
+  if (!forceRestart && !$video.paused && $video.readyState >= 2 && $video.videoWidth) {
+    return;
+  }
+
+  const track = $video.srcObject.getVideoTracks()[0];
+  if (!forceRestart && track?.readyState === "live") {
+    try {
+      await $video.play();
+    } catch {
+      /* fall through */
+    }
+    if (!$video.paused && $video.readyState >= 2 && $video.videoWidth) return;
+  }
+
+  await restartCameraStream();
 }
 
 async function restartCameraStream() {
@@ -1536,9 +1641,19 @@ function nextDetectionTimestamp() {
 function detectionLoop() {
   if (!GameState.isRunning) return;
 
+  try {
+    runDetectionFrame();
+  } catch (err) {
+    console.error("[AI] 検出ループエラー:", err);
+    lastTimestamp = -1;
+  }
+
+  GameState.animFrameId = requestAnimationFrame(detectionLoop);
+}
+
+function runDetectionFrame() {
   const timestamp = nextDetectionTimestamp();
   if (timestamp <= lastTimestamp) {
-    GameState.animFrameId = requestAnimationFrame(detectionLoop);
     return;
   }
   lastTimestamp = timestamp;
@@ -1547,7 +1662,6 @@ function detectionLoop() {
 
   if ($video.paused || $video.readyState < 2 || !$video.videoWidth) {
     resumeCamera();
-    GameState.animFrameId = requestAnimationFrame(detectionLoop);
     return;
   }
 
@@ -1557,13 +1671,30 @@ function detectionLoop() {
   const needsPose = level.type === "pose" || level.type === "both";
 
   if (faceLandmarker) {
-    lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
+    try {
+      lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
+      faceDetectErrors = 0;
+    } catch (err) {
+      console.warn("[AI] 顔検出失敗:", err);
+      lastFaceResult = null;
+      faceDetectErrors++;
+      if (faceDetectErrors >= 5) {
+        faceDetectErrors = 0;
+        releaseFaceLandmarker();
+        ensureFaceLandmarker().catch(() => {});
+      }
+    }
   } else {
     lastFaceResult = null;
   }
 
   if (needsPose && poseLandmarker) {
-    lastPoseResult = poseLandmarker.detectForVideo($video, timestamp);
+    try {
+      lastPoseResult = poseLandmarker.detectForVideo($video, timestamp);
+    } catch (err) {
+      console.warn("[AI] ポーズ検出失敗:", err);
+      lastPoseResult = null;
+    }
   } else {
     lastPoseResult = null;
   }
@@ -1603,8 +1734,73 @@ function detectionLoop() {
       GameState.holdCount = Math.max(0, GameState.holdCount - 1);
     }
   }
+}
 
+async function startLevel(index, opts = {}) {
+  cancelPosePreload();
+  GameState.currentLevelIndex = index;
+  GameState.holdCount         = 0;
+  GameState.isCleared         = false;
+  GameState.isRunning         = false;
+  lastTimestamp               = -1;
+  mpFallbackMs                = 0;
+  faceDetectErrors            = 0;
+
+  cancelAnimationFrame(GameState.animFrameId);
+  resetClearModalPreview();
+  resetFXSmoothing();
+  ctx.clearRect(0, 0, $canvas.width, $canvas.height);
+
+  const level = currentLevel();
+  updateLevelUI(level);
+
+  await wakeCameraForLevel(Boolean(opts.forceCameraRestart));
+
+  const nextNeedsPose = level.type === "pose" || level.type === "both";
+  const nextNeedsFace = level.type === "face" || level.type === "both";
+  const loadingMsg = nextNeedsPose && nextNeedsFace
+    ? "AI準備中..."
+    : nextNeedsPose
+      ? "ポーズAI準備中..."
+      : "AI INITIALIZING...";
+  setLoadingText(loadingMsg);
+  const ready = await ensureDetectorForLevel(level);
+  if (!ready) {
+    alert(`LEVEL ${level.id} の準備に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`);
+    return false;
+  }
+
+  schedulePosePreload(index);
+
+  GameState.isRunning = true;
   GameState.animFrameId = requestAnimationFrame(detectionLoop);
+  return true;
+}
+
+async function goNextLevel() {
+  kickVideoPlayback();
+  document.getElementById("clear-modal").classList.remove("visible");
+  resetClearModalPreview();
+
+  if (GameState.currentLevelIndex < LEVELS.length - 1) {
+    const started = await startLevel(GameState.currentLevelIndex + 1, { forceCameraRestart: true });
+    if (!started) {
+      document.getElementById("clear-modal").classList.add("visible");
+      GameState.isRunning = false;
+    }
+  } else {
+    showAllClear();
+  }
+}
+
+async function retryLevel() {
+  kickVideoPlayback();
+  document.getElementById("clear-modal").classList.remove("visible");
+  resetClearModalPreview();
+  const started = await startLevel(GameState.currentLevelIndex, { forceCameraRestart: true });
+  if (!started) {
+    document.getElementById("clear-modal").classList.add("visible");
+  }
 }
 
 function drawFaceLandmarks(landmarks, fxActive) {
@@ -1873,69 +2069,6 @@ async function shareToSNS(platform) {
     case "native":
       await shareResult();
       break;
-  }
-}
-
-async function startLevel(index) {
-  GameState.currentLevelIndex = index;
-  GameState.holdCount         = 0;
-  GameState.isCleared         = false;
-  GameState.isRunning         = false;
-  lastTimestamp               = -1;
-  mpFallbackMs                = 0;
-
-  cancelAnimationFrame(GameState.animFrameId);
-  resetClearModalPreview();
-  resetFXSmoothing();
-  ctx.clearRect(0, 0, $canvas.width, $canvas.height);
-
-  const level = currentLevel();
-  updateLevelUI(level);
-
-  await resumeCamera();
-
-  const nextNeedsPose = level.type === "pose" || level.type === "both";
-  const nextNeedsFace = level.type === "face" || level.type === "both";
-  const loadingMsg = nextNeedsPose && nextNeedsFace
-    ? "AI準備中..."
-    : nextNeedsPose
-      ? "ポーズAI準備中..."
-      : "AI INITIALIZING...";
-  setLoadingText(loadingMsg);
-  const ready = await ensureDetectorForLevel(level);
-  if (!ready) {
-    alert(`LEVEL ${level.id} の準備に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`);
-    return false;
-  }
-
-  preloadPoseModelDelayed();
-
-  GameState.isRunning = true;
-  GameState.animFrameId = requestAnimationFrame(detectionLoop);
-  return true;
-}
-
-async function goNextLevel() {
-  document.getElementById("clear-modal").classList.remove("visible");
-  resetClearModalPreview();
-
-  if (GameState.currentLevelIndex < LEVELS.length - 1) {
-    const started = await startLevel(GameState.currentLevelIndex + 1);
-    if (!started) {
-      document.getElementById("clear-modal").classList.add("visible");
-      GameState.isRunning = false;
-    }
-  } else {
-    showAllClear();
-  }
-}
-
-async function retryLevel() {
-  document.getElementById("clear-modal").classList.remove("visible");
-  resetClearModalPreview();
-  const started = await startLevel(GameState.currentLevelIndex);
-  if (!started) {
-    document.getElementById("clear-modal").classList.add("visible");
   }
 }
 
