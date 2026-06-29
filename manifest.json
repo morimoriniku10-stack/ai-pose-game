@@ -2,7 +2,7 @@
   "name": "POSE",
   "short_name": "ポーズゲーム",
   "description": "カメラでポーズを真似してクリアするAIゲーム",
-  "start_url": "/",
+  "start_url": "/play.html",
   "display": "standalone",
   "background_color": "#0a0a0f",
   "theme_color": "#0a0a0f",

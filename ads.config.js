@@ -1,10 +1,12 @@
 /**
  * POSE 広告設定（AdSense）
  *
- * 1. https://www.google.com/adsense/ でサイトを登録・審査
- * 2. 広告ユニットを3つ作成（スタートバナー / クリアバナー / インタースティシャル）
- * 3. 下記 publisherId と slots に ID を貼り付け
- * 4. サイトルートに ads.txt を配置（AdSense 管理画面から取得）
+ * 【AdSense 審査前チェックリスト】
+ * 1. site.config.js の contactEmail / siteUrl を更新
+ * 2. ads.txt を AdSense 管理画面の内容に差し替え
+ * 3. 下記 publisherId と slots を設定し、コードをデプロイ
+ * 4. AdSense 申請時は「サイト URL」にトップページ（/）を登録
+ * 5. 審査中は広告コードが head/body に含まれることを確認（ads.js が読み込まれること）
  */
 window.POSE_AD_CONFIG = {
   /** ca-pub-xxxxxxxxxxxxxxxx 形式。空のままなら広告は非表示 */

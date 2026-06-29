@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="POSE利用規約。" />
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/site.css" />
+  <title>利用規約 | POSE</title>
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-logo" href="/">POSE</a>
+    <nav class="site-nav">
+      <a href="/guide.html">遊び方</a>
+      <a href="/about.html">About</a>
+      <a href="/privacy.html">プライバシー</a>
+      <a href="/play.html">ゲーム</a>
+    </nav>
+  </header>
+
+  <main class="site-main">
+    <h1>利用規約</h1>
+    <p>最終更新日: <span id="terms-date">2026-06-26</span></p>
+    <p>本規約は、POSE（以下「当サービス」）の利用条件を定めるものです。利用者は本規約に同意のうえご利用ください。</p>
+
+    <h2>第1条（適用）</h2>
+    <p>本規約は、利用者と当サービス運営者との間の一切の関係に適用されます。</p>
+
+    <h2>第2条（サービス内容）</h2>
+    <p>当サービスは、カメラと AI を用いたポーズ・表情判定ゲームを無料で提供します。内容は予告なく変更・終了する場合があります。</p>
+
+    <h2>第3条（利用環境）</h2>
+    <p>利用者は、HTTPS 対応ブラウザおよびカメラ機能を備えた端末を用意するものとします。通信料は利用者の負担となります。</p>
+
+    <h2>第4条（禁止事項）</h2>
+    <p>利用者は以下の行為を行ってはなりません。</p>
+    <ul>
+      <li>法令または公序良俗に反する行為</li>
+      <li>当サービスの運営を妨害する行為</li>
+      <li>不正アクセス、リバースエンジニアリング等の技術的妨害</li>
+      <li>広告の不正クリック、クリックの誘導・奨励</li>
+      <li>他者の肖像権・プライバシーを侵害する撮影・投稿</li>
+      <li>その他、運営者が不適切と判断する行為</li>
+    </ul>
+
+    <h2>第5条（知的財産）</h2>
+    <p>当サービスのプログラム、デザイン、テキスト等の著作権は運営者または正当な権利者に帰属します。利用者が撮影した画像の権利は利用者に帰属します。</p>
+
+    <h2>第6条（免責）</h2>
+    <p>
+      当サービスは現状有姿で提供されます。AI 判定の正確性、継続的な可用性、特定目的への適合性について保証しません。
+      利用により生じた損害について、運営者の故意または重過失による場合を除き、責任を負いません。
+    </p>
+
+    <h2>第7条（広告）</h2>
+    <p>当サービスには第三者の広告（Google AdSense 等）が表示される場合があります。広告内容について運営者は責任を負いません。</p>
+
+    <h2>第8条（規約の変更）</h2>
+    <p>運営者は、必要に応じ本規約を変更できます。変更後の利用により、変更に同意したものとみなします。</p>
+
+    <h2>第9条（お問い合わせ）</h2>
+    <p>本規約に関するお問い合わせは <a href="/contact.html">お問い合わせページ</a> よりご連絡ください。</p>
+  </main>
+
+  <footer class="site-footer">
+    <nav>
+      <a href="/about.html">About</a>
+      <a href="/guide.html">遊び方</a>
+      <a href="/privacy.html">プライバシーポリシー</a>
+      <a href="/terms.html">利用規約</a>
+      <a href="/contact.html">お問い合わせ</a>
+    </nav>
+    <p>© POSE</p>
+  </footer>
+
+  <script src="/site.config.js"></script>
+  <script>
+    const s = window.POSE_SITE || {};
+    if (s.lastUpdated) document.getElementById("terms-date").textContent = s.lastUpdated;
+  </script>
+  <script src="/consent.js"></script>
+</body>
+</html>

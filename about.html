@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="POSE運営について。AIポーズゲームの目的と開発方針。" />
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/site.css" />
+  <title>About | POSE</title>
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-logo" href="/">POSE</a>
+    <nav class="site-nav">
+      <a href="/guide.html">遊び方</a>
+      <a href="/privacy.html">プライバシー</a>
+      <a href="/contact.html">お問い合わせ</a>
+      <a href="/play.html">ゲーム</a>
+    </nav>
+  </header>
+
+  <main class="site-main">
+    <h1>About POSE</h1>
+
+    <h2>サービス概要</h2>
+    <p>
+      POSE は、カメラと AI を使ってポーズや表情をリアルタイムに判定する、ブラウザベースの無料ゲームです。
+      アプリストアからのダウンロードは不要で、URL にアクセスするだけですぐに遊べます。
+    </p>
+
+    <h2>ミッション</h2>
+    <p>
+      「カメラを向けるだけで、誰でも気軽に遊べる」エンターテインメントを提供すること。
+      友達や家族と一緒にポーズを決め、クリア画面を SNS でシェアして盛り上がる——そんな体験を目指しています。
+    </p>
+
+    <h2>技術について</h2>
+    <p>
+      顔・ポーズ認識には Google の MediaPipe を使用しています。
+      映像処理はすべてユーザーの端末上（ブラウザ内）で行われ、プライバシーに配慮した設計です。
+      ホスティングには Vercel を使用し、HTTPS による安全な接続を提供しています。
+    </p>
+
+    <h2>コンテンツ方針</h2>
+    <p>
+      当サービスは全年齢向けのコメディ・エンターテインメントコンテンツを提供します。
+      過度に暴力的・性的・差別的な表現は含めないよう、レベルデザインとテキストを管理しています。
+    </p>
+
+    <h2>運営者</h2>
+    <p>運営: <span id="about-operator">POSE 運営</span></p>
+    <p>お問い合わせは <a href="/contact.html">お問い合わせページ</a> よりご連絡ください。</p>
+
+    <p style="margin-top:24px"><a class="btn-play" href="/play.html">ゲームを始める →</a></p>
+  </main>
+
+  <footer class="site-footer">
+    <nav>
+      <a href="/about.html">About</a>
+      <a href="/guide.html">遊び方</a>
+      <a href="/privacy.html">プライバシーポリシー</a>
+      <a href="/terms.html">利用規約</a>
+      <a href="/contact.html">お問い合わせ</a>
+    </nav>
+    <p>© POSE</p>
+  </footer>
+
+  <script src="/site.config.js"></script>
+  <script>
+    const s = window.POSE_SITE || {};
+    if (s.operatorName) document.getElementById("about-operator").textContent = s.operatorName;
+  </script>
+  <script src="/consent.js"></script>
+</body>
+</html>

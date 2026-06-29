@@ -93,11 +93,11 @@ const LEVELS = [
   },
   {
     id: 11, type: "pose", players: 1,
-    title: "グラビア風「手ブラ」", emoji: "📸",
-    hint: "両手首を胸の前で交差、正面を見て！",
+    title: "照れ隠しポーズ", emoji: "🙈",
+    hint: "両手のひらを胸の前で重ねて、恥ずかしがって！",
     detector: "detectHandBra",
     guide: "hand-bra",
-    shareText: "【閲覧注意】命がけの手ブラポーズ。 #AIシルエットマッチ",
+    shareText: "照れ隠しポーズ大成功！ #AIシルエットマッチ",
     clearThreshold: 0.50, holdFrames: 16
   },
   {

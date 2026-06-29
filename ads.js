@@ -21,6 +21,7 @@ function isAdsConfigured() {
 
 function shouldShowAdsNow() {
   if (!isAdsConfigured()) return false;
+  if (typeof hasAdConsent === "function" && !hasAdConsent()) return false;
   if (typeof isInAppBrowser === "function" && isInAppBrowser()) return false;
   return true;
 }

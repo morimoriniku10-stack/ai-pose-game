@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="POSEへのお問い合わせ。" />
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/site.css" />
+  <title>お問い合わせ | POSE</title>
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-logo" href="/">POSE</a>
+    <nav class="site-nav">
+      <a href="/guide.html">遊び方</a>
+      <a href="/about.html">About</a>
+      <a href="/privacy.html">プライバシー</a>
+      <a href="/play.html">ゲーム</a>
+    </nav>
+  </header>
+
+  <main class="site-main">
+    <h1>お問い合わせ</h1>
+    <p>
+      POSE に関するご質問、不具合報告、広告・提携のご相談などは、下記メールアドレスまでお問い合わせください。
+      通常、3 営業日以内に返信いたします。
+    </p>
+
+    <h2>メール</h2>
+    <p>
+      <a id="contact-email" href="mailto:contact@example.com">contact@example.com</a>
+    </p>
+    <p style="font-size:13px;color:#888">
+      ※ 審査・運用前に <code>site.config.js</code> の contactEmail を実在するアドレスに更新してください。
+    </p>
+
+    <h2>よくあるご質問</h2>
+    <h3>カメラが起動しません</h3>
+    <p>Safari または Chrome で直接開いているか確認してください。LINE 等のアプリ内ブラウザでは動作しません。ブラウザの設定でカメラ許可をオンにしてください。</p>
+
+    <h3>AI の読み込みに失敗します</h3>
+    <p>Wi-Fi 環境でお試しください。ページを再読み込みし、低電力モードをオフにしてください。</p>
+
+    <h3>個人情報・プライバシー</h3>
+    <p><a href="/privacy.html">プライバシーポリシー</a>をご確認ください。カメラ映像は端末内処理のみで、サーバーには送信されません。</p>
+  </main>
+
+  <footer class="site-footer">
+    <nav>
+      <a href="/about.html">About</a>
+      <a href="/guide.html">遊び方</a>
+      <a href="/privacy.html">プライバシーポリシー</a>
+      <a href="/terms.html">利用規約</a>
+      <a href="/contact.html">お問い合わせ</a>
+    </nav>
+    <p>© POSE</p>
+  </footer>
+
+  <script src="/site.config.js"></script>
+  <script>
+    const s = window.POSE_SITE || {};
+    if (s.contactEmail) {
+      const el = document.getElementById("contact-email");
+      el.textContent = s.contactEmail;
+      el.href = "mailto:" + s.contactEmail;
+    }
+  </script>
+  <script src="/consent.js"></script>
+</body>
+</html>

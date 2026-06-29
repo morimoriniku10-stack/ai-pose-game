@@ -4,3 +4,4 @@ node_modules/
 wasm/
 models/
 *.log
+ai-pose-game-latest.tar.gz
