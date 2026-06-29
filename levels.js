@@ -692,6 +692,11 @@ function levelWantsOptionalPose(level) {
   return levelUsesDualDetection(level) && !levelNeedsPoseModel(level);
 }
 
+/** ポーズモデルが必要（必須 or 任意）か */
+function levelUsesPoseAtAll(level) {
+  return levelNeedsPoseModel(level) || levelWantsOptionalPose(level);
+}
+
 function updateGuideOverlay(level) {
   const el = document.getElementById("guide-overlay");
   if (!el) return;

@@ -1077,6 +1077,7 @@ let faceDetectErrors = 0;
 let localAssetsAvailable = null;
 let wasmBaseCached = null;
 let detectFrameCounter = 0;
+let poseInitGeneration = 0;
 
 function isInAppBrowser() {
   const ua = navigator.userAgent;
@@ -1541,25 +1542,33 @@ async function ensurePoseLandmarkerForLevel(level) {
     if (poseLandmarker && loadedPoseNumPoses >= needed) return true;
   }
 
+  const gen = poseInitGeneration;
   poseInitPromise = (async () => {
     try {
       const vision = await getVisionTask();
       for (const delegate of getDelegates()) {
         try {
           setLoadingText(`ポーズモデル読込中 (${delegate})...`);
-          poseLandmarker = await loadPoseLandmarker(vision, delegate, needed);
-          loadedPoseNumPoses = poseLandmarker._numPoses ?? needed;
+          const landmarker = await loadPoseLandmarker(vision, delegate, needed);
+          if (gen !== poseInitGeneration) {
+            try { landmarker.close(); } catch (e) { /* ignore */ }
+            return false;
+          }
+          poseLandmarker = landmarker;
+          loadedPoseNumPoses = landmarker._numPoses ?? needed;
           console.log(`[AI] PoseLandmarker 完了 (${delegate}, numPoses=${loadedPoseNumPoses})`);
           return true;
         } catch (err) {
           console.warn(`[AI] PoseLandmarker ${delegate} 失敗:`, err);
-          poseLandmarker = null;
-          loadedPoseNumPoses = 0;
+          if (gen === poseInitGeneration) {
+            poseLandmarker = null;
+            loadedPoseNumPoses = 0;
+          }
         }
       }
       throw new Error("ポーズモデルの読み込みに失敗しました");
     } catch (err) {
-      poseInitPromise = null;
+      if (gen === poseInitGeneration) poseInitPromise = null;
       throw err;
     }
   })();
@@ -1609,26 +1618,17 @@ function schedulePosePreload(currentIndex) {
   cancelPosePreload();
   if (poseLandmarker || poseInitPromise) return;
 
-  let targetIndex = -1;
-  for (let i = currentIndex + 1; i < LEVELS.length; i++) {
-    const lv = LEVELS[i];
-    if (levelNeedsPoseModel(lv) || levelWantsOptionalPose(lv)) {
-      targetIndex = i;
-      break;
-    }
-  }
-  if (targetIndex === -1) return;
+  const nextLevel = LEVELS[currentIndex + 1];
+  if (!nextLevel) return;
+  if (!levelUsesPoseAtAll(nextLevel)) return;
 
-  const levelsAway = targetIndex - currentIndex;
-  if (levelsAway > 4) return;
-
-  const targetLevel = LEVELS[targetIndex];
-  const delay = levelsAway <= 1 ? 800 : (isMobile() ? 2500 : 1000);
+  const delay = isMobile() ? 2000 : 800;
 
   posePreloadTimer = setTimeout(() => {
     posePreloadTimer = null;
     if (!GameState.isRunning || poseLandmarker || poseInitPromise) return;
-    ensurePoseLandmarkerForLevel(targetLevel).catch(err => {
+    if (GameState.currentLevelIndex !== currentIndex) return;
+    ensurePoseLandmarkerForLevel(nextLevel).catch(err => {
       console.warn("[AI] ポーズ先読み失敗:", err);
     });
   }, delay);
@@ -1709,12 +1709,13 @@ function releaseFaceLandmarker() {
 }
 
 function releasePoseLandmarker() {
+  poseInitGeneration++;
   if (poseLandmarker) {
     try { poseLandmarker.close(); } catch (e) { /* ignore */ }
     poseLandmarker = null;
     loadedPoseNumPoses = 0;
-    poseInitPromise = null;
   }
+  poseInitPromise = null;
 }
 
 function kickVideoPlayback() {
@@ -1922,6 +1923,7 @@ async function startLevel(index, opts = {}) {
   lastTimestamp               = -1;
   mpFallbackMs                = 0;
   faceDetectErrors            = 0;
+  detectFrameCounter          = 0;
 
   cancelAnimationFrame(GameState.animFrameId);
   resetClearModalPreview();
@@ -1929,6 +1931,9 @@ async function startLevel(index, opts = {}) {
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
   const level = currentLevel();
+  if (!levelUsesPoseAtAll(level) && (poseLandmarker || poseInitPromise)) {
+    releasePoseLandmarker();
+  }
   updateLevelUI(level);
 
   await wakeCameraForLevel(Boolean(opts.forceCameraRestart));
@@ -1955,9 +1960,10 @@ async function startLevel(index, opts = {}) {
 }
 
 async function goNextLevel() {
-  kickVideoPlayback();
   document.getElementById("clear-modal").classList.remove("visible");
   resetClearModalPreview();
+  kickVideoPlayback();
+  await resumeCamera();
 
   await beforeGoNextLevel();
 
@@ -2104,15 +2110,18 @@ async function handleClear() {
   GameState.score += 100;
   updateScore();
 
-  const captureCanvas = document.createElement("canvas");
-  captureCanvas.width  = $video.videoWidth;
-  captureCanvas.height = $video.videoHeight;
-  const captureCtx = captureCanvas.getContext("2d");
-  captureCtx.translate(captureCanvas.width, 0);
-  captureCtx.scale(-1, 1);
-  captureCtx.drawImage($video, 0, 0);
-
-  const captureDataUrl = captureCanvas.toDataURL("image/jpeg", 0.85);
+  const level = currentLevel();
+  const captureDataUrl = captureStyledShareFrame($video, level, lastFaceResult, lastPoseResult)
+    || (() => {
+      const c = document.createElement("canvas");
+      c.width = $video.videoWidth;
+      c.height = $video.videoHeight;
+      const cx = c.getContext("2d");
+      cx.translate(c.width, 0);
+      cx.scale(-1, 1);
+      cx.drawImage($video, 0, 0);
+      return c.toDataURL("image/jpeg", 0.85);
+    })();
 
   const $preview = document.getElementById("capture-preview");
   $preview.src = captureDataUrl;

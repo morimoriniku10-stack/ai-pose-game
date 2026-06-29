@@ -232,22 +232,25 @@ function drawFaceLockUI(ctx, face, w, h) {
   corner(x0, y1, 1, -1);
   corner(x1, y1, -1, -1);
 
-  ctx.font = "bold 11px 'Share Tech Mono', monospace";
-  ctx.fillStyle = `rgba(184,255,46,${0.9 * pulse})`;
+  ctx.font = "bold 12px 'Share Tech Mono', monospace";
+  ctx.fillStyle = `rgba(184,255,46,${0.95 * pulse})`;
   ctx.textAlign = "center";
-  ctx.fillText("◉ FACE LOCK", face.cx, y0 - 10);
+  ctx.fillText("◉ FACE LOCK", face.cx, y0 - 12);
 
-  const keyIdx = [33, 263, 1, 61, 291, 10, 152];
+  const keyIdx = [33, 263, 1, 61, 291, 10, 152, 159, 386];
   for (const idx of keyIdx) {
     const lm = face.lm[idx];
     if (!lm) continue;
     const p = fxPt(lm, w, h);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(184,255,46,0.95)";
-    ctx.shadowColor = "rgba(184,255,46,0.9)";
-    ctx.shadowBlur = 8;
+    ctx.arc(p.x, p.y, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(184,255,46,0.98)";
+    ctx.shadowColor = "rgba(184,255,46,1)";
+    ctx.shadowBlur = 14;
     ctx.fill();
+    ctx.strokeStyle = "rgba(0,245,255,0.85)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -632,7 +635,7 @@ function drawBottomHint(ctx, text, w, h) {
   ctx.restore();
 }
 
-function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
+function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h, skipHint = false) {
   const guide = level.guide || "face-oval";
   const faces = (faceResult?.faceLandmarks ?? [])
     .slice(0, 2)
@@ -670,6 +673,7 @@ function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
       if (face || poseOrSynth) { fxDespair(ctx, face, poseOrSynth, w, h); tracked = true; }
       break;
     case "press-mic":
+      if (face) drawFaceWireMeshWithScan(ctx, face.lm, w, h, face, 45);
       if (face || poseOrSynth) {
         fxPressMic(ctx, pose, face, w, h);
         if (poseOrSynth) fxPoseBody(ctx, poseOrSynth, w, h, 45);
@@ -809,7 +813,83 @@ function drawTrackedLevelFX(ctx, level, faceResult, poseResult, w, h) {
       : (level.type === "pose" || level.type === "both"
         ? "少し離れて上半身〜腰を映して！"
         : "顔を枠に入れて！"));
-  drawBottomHint(ctx, hint, w, h);
+  if (!skipHint) drawBottomHint(ctx, hint, w, h);
 
   return tracked;
+}
+
+const SHARE_FILTER_TINT = {
+  "face-oval": "rgba(0,245,255,0.07)",
+  "heian": "rgba(120,60,180,0.14)",
+  "salaryman": "rgba(80,100,140,0.12)",
+  "press-mic": "rgba(30,30,45,0.16)",
+  "uffun": "rgba(255,120,180,0.1)",
+  "cockroach": "rgba(60,80,40,0.12)",
+  "despair": "rgba(20,30,80,0.18)",
+  "abnormal-run": "rgba(180,60,40,0.1)",
+  "otaku-romance": "rgba(255,200,80,0.1)",
+  "hand-bra": "rgba(255,160,200,0.1)",
+  "titanic": "rgba(100,180,255,0.12)"
+};
+
+function applyShareFilter(ctx, level, w, h) {
+  const tint = SHARE_FILTER_TINT[level.guide] || "rgba(0,245,255,0.06)";
+  ctx.save();
+  ctx.fillStyle = tint;
+  ctx.fillRect(0, 0, w, h);
+  const vg = ctx.createRadialGradient(w / 2, h * 0.42, h * 0.15, w / 2, h * 0.42, h * 0.92);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(0,0,0,0.38)");
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+function drawShareStamp(ctx, level, w, h) {
+  const barH = Math.max(h * 0.11, 56);
+  ctx.save();
+  const grad = ctx.createLinearGradient(0, h - barH * 1.3, 0, h);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(1, "rgba(0,0,0,0.72)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, h - barH * 1.35, w, barH * 1.35);
+
+  const titleSize = Math.round(Math.min(w * 0.048, 42));
+  const subSize = Math.round(Math.min(w * 0.03, 26));
+  ctx.font = `800 ${titleSize}px 'M PLUS Rounded 1c', sans-serif`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 8;
+  ctx.fillText(`${level.emoji} ${level.title}`, w * 0.05, h - barH * 0.52);
+  ctx.font = `700 ${subSize}px 'Share Tech Mono', monospace`;
+  ctx.fillStyle = "rgba(184,255,46,0.95)";
+  ctx.fillText(`LEVEL ${level.id} CLEAR — POSE`, w * 0.05, h - barH * 0.18);
+  ctx.restore();
+}
+
+/** クリア時シェア用 — カメラ映像 + ARエフェクト + フィルター */
+function captureStyledShareFrame(video, level, faceResult, poseResult) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return null;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = vw;
+  canvas.height = vh;
+  const ctx = canvas.getContext("2d");
+
+  ctx.save();
+  ctx.translate(vw, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0, vw, vh);
+  ctx.restore();
+
+  resetFXSmoothing();
+  drawTrackedLevelFX(ctx, level, faceResult, poseResult, vw, vh, true);
+  applyShareFilter(ctx, level, vw, vh);
+  drawShareStamp(ctx, level, vw, vh);
+
+  return canvas.toDataURL("image/jpeg", 0.88);
 }
