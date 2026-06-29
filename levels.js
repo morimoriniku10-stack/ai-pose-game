@@ -47,7 +47,7 @@ const LEVELS = [
     clearThreshold: 0.40, holdFrames: 14
   },
   {
-    id: 6, type: "both", players: 1,
+    id: 6, type: "face", players: 1,
     title: "昭和アイドル風「うっふん❤️」", emoji: "💋",
     hint: "首を傾け、人差し指を顎に近づけて！",
     detector: "detectUffun",
@@ -56,7 +56,7 @@ const LEVELS = [
     clearThreshold: 0.45, holdFrames: 14
   },
   {
-    id: 7, type: "both", players: 1,
+    id: 7, type: "face", players: 1,
     title: "G（ゴキブリ）遭遇パニック", emoji: "🪳",
     hint: "口を大きく開け、両手を顔の横に！",
     detector: "detectCockroachPanic",
@@ -74,7 +74,7 @@ const LEVELS = [
     clearThreshold: 0.42, holdFrames: 14
   },
   {
-    id: 9, type: "both", players: 1,
+    id: 9, type: "face", players: 1,
     title: "カイジ風・全財産失った絶望", emoji: "🎰",
     hint: "両手で顔を覆うか、頭を抱えて！",
     detector: "detectKaijiDespair",
@@ -657,11 +657,39 @@ const DETECTORS = {
 function evaluateDetection(level, faceResult, poseResult) {
   const fn = DETECTORS[level.detector];
   if (!fn) return 0;
-  if (level.type === "both") {
+  if (levelUsesDualDetection(level)) {
     return fn({ face: faceResult, pose: poseResult });
   }
-  if (level.type === "face") return fn(faceResult);
+  if (levelNeedsFaceModel(level)) return fn(faceResult);
   return fn(poseResult);
+}
+
+/** 顔+ポーズ複合入力の detector */
+const DUAL_INPUT_DETECTORS = new Set([
+  "detectUffun",
+  "detectCockroachPanic",
+  "detectKaijiDespair",
+  "detectSoloTitanic",
+  "detectApologyBow"
+]);
+
+function levelUsesDualDetection(level) {
+  return DUAL_INPUT_DETECTORS.has(level.detector);
+}
+
+function levelNeedsFaceModel(level) {
+  return level.type === "face" || level.type === "both";
+}
+
+/** レベル開始前にポーズモデルが必須か（false なら顔AIだけで開始可能） */
+function levelNeedsPoseModel(level) {
+  if (level.type === "pose") return true;
+  if (level.type === "face") return false;
+  return level.detector === "detectSoloTitanic";
+}
+
+function levelWantsOptionalPose(level) {
+  return levelUsesDualDetection(level) && !levelNeedsPoseModel(level);
 }
 
 function updateGuideOverlay(level) {

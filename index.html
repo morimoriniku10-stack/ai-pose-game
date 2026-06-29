@@ -954,6 +954,9 @@ function getPoseModelPaths() {
 let loadedPoseNumPoses = 0;
 let posePreloadTimer = null;
 let faceDetectErrors = 0;
+let localAssetsAvailable = null;
+let wasmBaseCached = null;
+let detectFrameCounter = 0;
 
 function isInAppBrowser() {
   const ua = navigator.userAgent;
@@ -1254,14 +1257,41 @@ async function withRetry(label, fn, retries = 3) {
   throw lastError;
 }
 
+async function checkLocalAssets() {
+  if (localAssetsAvailable !== null) return localAssetsAvailable;
+  try {
+    const res = await fetch("/models/face_landmarker.task", { method: "HEAD", cache: "no-store" });
+    localAssetsAvailable = res.ok;
+  } catch {
+    localAssetsAvailable = false;
+  }
+  return localAssetsAvailable;
+}
+
+function getFaceModelPaths() {
+  return localAssetsAvailable
+    ? FACE_MODELS
+    : FACE_MODELS.slice(1);
+}
+
+function getPoseModelPathsFiltered() {
+  const paths = getPoseModelPaths();
+  return localAssetsAvailable ? paths : paths.filter(p => p.startsWith("http"));
+}
+
 async function resolveWasmBase() {
+  if (wasmBaseCached) return wasmBaseCached;
   try {
     const res = await fetch("/wasm/vision_wasm_internal.js", { method: "HEAD", cache: "no-store" });
-    if (res.ok) return "/wasm";
+    if (res.ok) {
+      wasmBaseCached = "/wasm";
+      return wasmBaseCached;
+    }
   } catch {
     /* CDN fallback */
   }
-  return `${window.MP.CDN}/wasm`;
+  wasmBaseCached = `${window.MP.CDN}/wasm`;
+  return wasmBaseCached;
 }
 
 async function getVisionTask() {
@@ -1301,11 +1331,13 @@ async function createPoseLandmarker(vision, delegate, modelPath, numPoses = 4) {
 
 async function loadFaceLandmarker(vision, delegate) {
   let lastError = null;
-  for (const modelPath of FACE_MODELS) {
+  const retries = localAssetsAvailable ? 3 : 1;
+  for (const modelPath of getFaceModelPaths()) {
     try {
       return await withRetry(
         `FaceLandmarker/${delegate}/${modelPath}`,
-        () => createFaceLandmarker(vision, delegate, modelPath)
+        () => createFaceLandmarker(vision, delegate, modelPath),
+        retries
       );
     } catch (err) {
       lastError = err;
@@ -1326,14 +1358,14 @@ async function loadPoseLandmarker(vision, delegate, minPoses = 1) {
     ? [...new Set([Math.min(minPoses, 2), 1, 2])].sort((a, b) => a - b)
     : [...new Set([minPoses, 1, 2, 4])].sort((a, b) => a - b);
 
-  for (const modelPath of getPoseModelPaths()) {
+  for (const modelPath of getPoseModelPathsFiltered()) {
     for (const numPoses of tryCounts) {
       if (numPoses < minPoses) continue;
       try {
         const landmarker = await withRetry(
           `PoseLandmarker/${delegate}/${numPoses}/${modelPath}`,
           () => createPoseLandmarker(vision, delegate, modelPath, numPoses),
-          2
+          localAssetsAvailable ? 2 : 1
         );
         landmarker._numPoses = numPoses;
         return landmarker;
@@ -1418,14 +1450,19 @@ async function ensurePoseLandmarkerForLevel(level) {
 async function ensureDetectorForLevel(level) {
   showLoading(true);
   try {
-    const needsFace = level.type === "face" || level.type === "both";
-    const needsPose = level.type === "pose" || level.type === "both";
-    if (needsFace) await ensureFaceLandmarker();
-    if (needsPose) await ensurePoseLandmarkerForLevel(level);
+    await checkLocalAssets();
+    if (levelNeedsFaceModel(level)) await ensureFaceLandmarker();
+    if (levelNeedsPoseModel(level)) {
+      await ensurePoseLandmarkerForLevel(level);
+    } else if (levelWantsOptionalPose(level)) {
+      ensurePoseLandmarkerForLevel(level).catch(err => {
+        console.warn("[AI] ポーズ任意読込失敗（顔AIのみ継続）:", err);
+      });
+    }
     return true;
   } catch (err) {
     console.error("[AI] モデル読込失敗:", err);
-    const needsPose = level.type === "pose" || level.type === "both";
+    const needsPose = levelNeedsPoseModel(level);
     showCompatibilityResult({
       ok: false,
       issues: [{
@@ -1452,19 +1489,21 @@ function schedulePosePreload(currentIndex) {
   cancelPosePreload();
   if (poseLandmarker || poseInitPromise) return;
 
-  let nextPoseIndex = -1;
+  let targetIndex = -1;
   for (let i = currentIndex + 1; i < LEVELS.length; i++) {
-    const t = LEVELS[i].type;
-    if (t === "pose" || t === "both") {
-      nextPoseIndex = i;
+    const lv = LEVELS[i];
+    if (levelNeedsPoseModel(lv) || levelWantsOptionalPose(lv)) {
+      targetIndex = i;
       break;
     }
   }
-  if (nextPoseIndex === -1) return;
-  if (nextPoseIndex - currentIndex > 2) return;
+  if (targetIndex === -1) return;
 
-  const targetLevel = LEVELS[nextPoseIndex];
-  const delay = isMobile() ? 4000 : 1500;
+  const levelsAway = targetIndex - currentIndex;
+  if (levelsAway > 4) return;
+
+  const targetLevel = LEVELS[targetIndex];
+  const delay = levelsAway <= 1 ? 800 : (isMobile() ? 2500 : 1000);
 
   posePreloadTimer = setTimeout(() => {
     posePreloadTimer = null;
@@ -1482,6 +1521,7 @@ function setLoadingText(text) {
 
 function preloadMediaPipeLibrary() {
   waitForMediaPipe().catch(() => {});
+  checkLocalAssets().catch(() => {});
 }
 
 const $video      = document.getElementById("video");
@@ -1578,17 +1618,26 @@ async function wakeCameraForLevel(forceRestart = false) {
     return;
   }
 
-  const track = $video.srcObject.getVideoTracks()[0];
-  if (!forceRestart && track?.readyState === "live") {
-    try {
-      await $video.play();
-    } catch {
-      /* fall through */
+  if (!forceRestart) {
+    const track = $video.srcObject.getVideoTracks()[0];
+    if (track?.readyState === "live") {
+      try {
+        await $video.play();
+      } catch {
+        /* fall through */
+      }
+      if (!$video.paused && $video.readyState >= 2 && $video.videoWidth) return;
     }
-    if (!$video.paused && $video.readyState >= 2 && $video.videoWidth) return;
   }
 
   await restartCameraStream();
+}
+
+function shouldForceCameraRestart() {
+  return !$video.srcObject
+    || $video.paused
+    || $video.readyState < 2
+    || !$video.videoWidth;
 }
 
 async function restartCameraStream() {
@@ -1667,10 +1716,18 @@ function runDetectionFrame() {
 
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
-  const needsFace = level.type === "face" || level.type === "both";
-  const needsPose = level.type === "pose" || level.type === "both";
+  const needsFace = levelNeedsFaceModel(level);
+  const needsPoseRequired = levelNeedsPoseModel(level);
+  const wantsPoseOptional = levelWantsOptionalPose(level);
+  const runPose = (needsPoseRequired || wantsPoseOptional) && poseLandmarker;
+  const heavyDetect = needsFace && runPose;
 
-  if (faceLandmarker) {
+  if (isMobile() && heavyDetect) {
+    detectFrameCounter++;
+    if (detectFrameCounter % 2 !== 0) return;
+  }
+
+  if (needsFace && faceLandmarker) {
     try {
       lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
       faceDetectErrors = 0;
@@ -1688,7 +1745,7 @@ function runDetectionFrame() {
     lastFaceResult = null;
   }
 
-  if (needsPose && poseLandmarker) {
+  if (runPose) {
     try {
       lastPoseResult = poseLandmarker.detectForVideo($video, timestamp);
     } catch (err) {
@@ -1715,7 +1772,7 @@ function runDetectionFrame() {
   let confidence = evaluateDetection(level, lastFaceResult, lastPoseResult);
 
   if (level.players >= 2) {
-    const count = level.type === "face"
+    const count = levelNeedsFaceModel(level)
       ? (lastFaceResult?.faceLandmarks?.length ?? 0)
       : (lastPoseResult?.landmarks?.length ?? 0);
     if (count < level.players) confidence = Math.min(confidence, 0.35);
@@ -1756,8 +1813,8 @@ async function startLevel(index, opts = {}) {
 
   await wakeCameraForLevel(Boolean(opts.forceCameraRestart));
 
-  const nextNeedsPose = level.type === "pose" || level.type === "both";
-  const nextNeedsFace = level.type === "face" || level.type === "both";
+  const nextNeedsPose = levelNeedsPoseModel(level);
+  const nextNeedsFace = levelNeedsFaceModel(level);
   const loadingMsg = nextNeedsPose && nextNeedsFace
     ? "AI準備中..."
     : nextNeedsPose
@@ -1783,7 +1840,9 @@ async function goNextLevel() {
   resetClearModalPreview();
 
   if (GameState.currentLevelIndex < LEVELS.length - 1) {
-    const started = await startLevel(GameState.currentLevelIndex + 1, { forceCameraRestart: true });
+    const started = await startLevel(GameState.currentLevelIndex + 1, {
+      forceCameraRestart: shouldForceCameraRestart()
+    });
     if (!started) {
       document.getElementById("clear-modal").classList.add("visible");
       GameState.isRunning = false;
@@ -1797,7 +1856,9 @@ async function retryLevel() {
   kickVideoPlayback();
   document.getElementById("clear-modal").classList.remove("visible");
   resetClearModalPreview();
-  const started = await startLevel(GameState.currentLevelIndex, { forceCameraRestart: true });
+  const started = await startLevel(GameState.currentLevelIndex, {
+    forceCameraRestart: shouldForceCameraRestart()
+  });
   if (!started) {
     document.getElementById("clear-modal").classList.add("visible");
   }
