@@ -37,6 +37,20 @@ ai-pose-game/
 └── package.json    # ローカル開発用
 ```
 
+## 広告（AdSense）
+
+1. [Google AdSense](https://www.google.com/adsense/) でサイトを登録
+2. `ads.config.js` に `publisherId` と各 `slots` の広告ユニット ID を設定
+3. `ads.txt` を AdSense 管理画面の内容に更新してデプロイ
+
+| 枠 | 配置 |
+|----|------|
+| スタートバナー | トップ画面「はじめる」の下 |
+| クリアバナー | クリアモーダル内 SNS の下 |
+| インタースティシャル | L3, L6, L9… クリア後 NEXT 時（3秒後にスキップ可） |
+
+`publisherId` が空の間は広告は表示されません。LINE 等のアプリ内ブラウザでは自動的に非表示です。
+
 ## 注意事項
 
 - カメラは HTTPS 環境でのみ動作します（localhost を除く）

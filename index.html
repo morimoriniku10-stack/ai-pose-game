@@ -604,7 +604,86 @@
       letter-spacing: 0.08em;
     }
 
-    /* 将来の広告枠（現在は非表示・レイアウト確保用） */
+    /* 広告枠 */
+    .ad-slot {
+      display: none;
+      width: 100%;
+      min-height: 50px;
+      margin: 0 auto;
+      overflow: hidden;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .ad-slot.ad-slot-visible {
+      display: block;
+    }
+
+    .ad-slot-label {
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      color: rgba(255, 255, 255, 0.35);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    #ad-slot-start {
+      max-width: 320px;
+      margin-top: 14px;
+    }
+
+    #ad-slot-clear {
+      max-width: 100%;
+    }
+
+    #ad-interstitial {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.88);
+      backdrop-filter: blur(8px);
+    }
+
+    #ad-interstitial.visible {
+      display: flex;
+    }
+
+    body.ad-interstitial-open {
+      overflow: hidden;
+    }
+
+    .ad-interstitial-card {
+      width: min(100%, 360px);
+      padding: 20px 16px;
+      border-radius: 16px;
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      text-align: center;
+    }
+
+    .ad-interstitial-card .ad-slot-label {
+      margin-bottom: 10px;
+    }
+
+    #ad-interstitial-slot {
+      min-height: 250px;
+      margin-bottom: 14px;
+    }
+
+    #ad-interstitial-close {
+      width: 100%;
+    }
+
+    #ad-interstitial-close:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    /* 旧 id 互換 */
     #ad-slot {
       display: none;
     }
@@ -818,6 +897,9 @@
       明るい場所で遊んでね<br>
       <span style="font-size:10px;color:#ccc">iOS 15+ / Android 9+ 推奨</span>
     </p>
+    <div id="ad-slot-start" class="ad-slot hidden" aria-hidden="true">
+      <div class="ad-slot-label">スポンサー</div>
+    </div>
   </div>
 </div>
 
@@ -886,8 +968,17 @@
       </div>
     </div>
 
-    <!-- 将来: バナー広告 / 動画広告をここに挿入 -->
-    <div id="ad-slot" hidden aria-hidden="true"></div>
+    <div id="ad-slot-clear" class="ad-slot hidden" aria-hidden="true">
+      <div class="ad-slot-label">スポンサー</div>
+    </div>
+  </div>
+</div>
+
+<div id="ad-interstitial" aria-hidden="true" role="dialog" aria-labelledby="ad-interstitial-title">
+  <div class="ad-interstitial-card">
+    <p class="ad-slot-label" id="ad-interstitial-title">スポンサー</p>
+    <div id="ad-interstitial-slot" class="ad-slot"></div>
+    <button type="button" class="btn btn-primary" id="ad-interstitial-close">続ける →</button>
   </div>
 </div>
 
@@ -913,6 +1004,8 @@
 
 <script src="/levels.js"></script>
 <script src="/ar-fx.js"></script>
+<script src="/ads.config.js"></script>
+<script src="/ads.js"></script>
 <script>
 const GameState = {
   currentLevelIndex: 0,
@@ -1839,6 +1932,8 @@ async function goNextLevel() {
   document.getElementById("clear-modal").classList.remove("visible");
   resetClearModalPreview();
 
+  await beforeGoNextLevel();
+
   if (GameState.currentLevelIndex < LEVELS.length - 1) {
     const started = await startLevel(GameState.currentLevelIndex + 1, {
       forceCameraRestart: shouldForceCameraRestart()
@@ -2009,6 +2104,9 @@ async function handleClear() {
   }
 
   window._captureDataUrl = captureDataUrl;
+
+  onLevelCleared();
+  refreshClearBanner();
 }
 
 function spawnParticles() {
@@ -2184,6 +2282,7 @@ document.getElementById("start-btn").addEventListener("click", async () => {
     resetStartScreen();
     releaseFaceLandmarker();
     releasePoseLandmarker();
+    resetAdSession();
     GameState.currentLevelIndex = 0;
     GameState.score = 0;
     updateScore();
@@ -2224,6 +2323,7 @@ function init() {
     showCompatibilityResult(checkCompatibility());
   }
   preloadMediaPipeLibrary();
+  initAds();
   console.log("[App] 初期化完了 — STARTボタン待機中");
 }
 
