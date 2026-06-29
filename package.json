@@ -4,7 +4,6 @@
   "private": true,
   "description": "カメラでポーズを真似してクリアするAIゲーム",
   "scripts": {
-    "build": "node scripts/copy-mediapipe.mjs",
     "postinstall": "node scripts/copy-mediapipe.mjs",
     "validate": "node scripts/validate-levels.mjs",
     "dev": "npx serve . -p 3000",

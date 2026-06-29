@@ -1,5 +1,7 @@
 {
   "installCommand": "npm install",
+  "buildCommand": "node scripts/copy-mediapipe.mjs",
+  "outputDirectory": ".",
   "headers": [
     {
       "source": "/models/(.*)",
