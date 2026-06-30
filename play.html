@@ -1074,11 +1074,14 @@ function getPoseModelPaths() {
 let loadedPoseNumPoses = 0;
 let posePreloadTimer = null;
 let faceDetectErrors = 0;
-let localAssetsAvailable = null;
+let localFaceModel = null;
+let localPoseModel = null;
 let wasmBaseCached = null;
 let detectFrameCounter = 0;
 let poseInitGeneration = 0;
 let faceInitGeneration = 0;
+const LEVEL_START_GRACE_MS = 2500;
+let levelStartedAt = 0;
 
 function isInAppBrowser() {
   const ua = navigator.userAgent;
@@ -1380,25 +1383,30 @@ async function withRetry(label, fn, retries = 3) {
 }
 
 async function checkLocalAssets() {
-  if (localAssetsAvailable !== null) return localAssetsAvailable;
+  if (localFaceModel !== null) return localFaceModel || localPoseModel;
   try {
-    const res = await fetch("/models/face_landmarker.task", { method: "HEAD", cache: "no-store" });
-    localAssetsAvailable = res.ok;
+    const [faceRes, poseRes] = await Promise.all([
+      fetch("/models/face_landmarker.task", { method: "HEAD", cache: "no-store" }),
+      fetch("/models/pose_landmarker_lite.task", { method: "HEAD", cache: "no-store" })
+    ]);
+    localFaceModel = faceRes.ok;
+    localPoseModel = poseRes.ok;
   } catch {
-    localAssetsAvailable = false;
+    localFaceModel = false;
+    localPoseModel = false;
   }
-  return localAssetsAvailable;
+  return localFaceModel || localPoseModel;
 }
 
 function getFaceModelPaths() {
-  return localAssetsAvailable
+  return localFaceModel
     ? FACE_MODELS
     : FACE_MODELS.slice(1);
 }
 
 function getPoseModelPathsFiltered() {
   const paths = getPoseModelPaths();
-  return localAssetsAvailable ? paths : paths.filter(p => p.startsWith("http"));
+  return localPoseModel ? paths : paths.filter(p => p.startsWith("http"));
 }
 
 async function resolveWasmBase() {
@@ -1416,7 +1424,8 @@ async function resolveWasmBase() {
   return wasmBaseCached;
 }
 
-async function getVisionTask() {
+async function getVisionTask(forceNew = false) {
+  if (forceNew) visionTask = null;
   if (visionTask) return visionTask;
   await waitForMediaPipe(isMobile() ? 90000 : 60000);
 
@@ -1453,7 +1462,7 @@ async function createPoseLandmarker(vision, delegate, modelPath, numPoses = 4) {
 
 async function loadFaceLandmarker(vision, delegate) {
   let lastError = null;
-  const retries = localAssetsAvailable ? 3 : 1;
+  const retries = localFaceModel ? 3 : 1;
   for (const modelPath of getFaceModelPaths()) {
     try {
       return await withRetry(
@@ -1487,7 +1496,7 @@ async function loadPoseLandmarker(vision, delegate, minPoses = 1) {
         const landmarker = await withRetry(
           `PoseLandmarker/${delegate}/${numPoses}/${modelPath}`,
           () => createPoseLandmarker(vision, delegate, modelPath, numPoses),
-          localAssetsAvailable ? 2 : 1
+          localPoseModel ? 2 : 1
         );
         landmarker._numPoses = numPoses;
         return landmarker;
@@ -1539,6 +1548,7 @@ async function ensurePoseLandmarkerForLevel(level) {
   if (poseLandmarker && loadedPoseNumPoses >= needed) return true;
   if (poseLandmarker && loadedPoseNumPoses < needed) {
     releasePoseLandmarker();
+    visionTask = null;
   }
   if (poseInitPromise) {
     try {
@@ -1583,6 +1593,19 @@ async function ensurePoseLandmarkerForLevel(level) {
   return poseInitPromise;
 }
 
+async function warmUpNextLevelModel(currentIndex) {
+  const next = LEVELS[currentIndex + 1];
+  if (!next || !levelNeedsPoseModel(next)) return;
+  const needed = getNumPosesForLevel(next);
+  if (poseLandmarker && loadedPoseNumPoses >= needed) return;
+  try {
+    setLoadingText(`LEVEL ${next.id} 用AI準備中...`);
+    await ensurePoseLandmarkerForLevel(next);
+  } catch (err) {
+    console.warn(`[AI] L${next.id} 向け先読み失敗（遷移時に再試行）:`, err);
+  }
+}
+
 async function ensureDetectorForLevel(level) {
   showLoading(true);
   try {
@@ -1596,6 +1619,11 @@ async function ensureDetectorForLevel(level) {
       return true;
     }
 
+    // ポーズ必須レベル: 顔AIを解放した直後は WASM を再初期化してからポーズを読込
+    if (levelNeedsPoseModel(level) && !poseLandmarker && !faceLandmarker) {
+      visionTask = null;
+    }
+
     if (levelNeedsFaceModel(level)) await ensureFaceLandmarker();
     if (levelNeedsPoseModel(level)) {
       await ensurePoseLandmarkerForLevel(level);
@@ -1607,15 +1635,6 @@ async function ensureDetectorForLevel(level) {
     return true;
   } catch (err) {
     console.error("[AI] モデル読込失敗:", err);
-    const needsPose = levelNeedsPoseModel(level);
-    showCompatibilityResult({
-      ok: false,
-      issues: [{
-        blocking: true,
-        title: needsPose ? "ポーズAIの読み込みに失敗しました" : "AIモデルの読み込みに失敗しました",
-        message: "Wi-Fiで接続し、ページを再読み込みしてお試しください。低電力モードをオフにすると改善することがあります。"
-      }]
-    });
     return false;
   } finally {
     showLoading(false);
@@ -1928,14 +1947,17 @@ function runDetectionFrame() {
   updateGauge(confidence);
 
   if (!GameState.isCleared) {
-    if (confidence >= level.clearThreshold) {
+    const inGrace = Date.now() - levelStartedAt < LEVEL_START_GRACE_MS;
+    if (confidence >= level.clearThreshold && !inGrace) {
       GameState.holdCount++;
       if (GameState.holdCount >= level.holdFrames) {
         handleClear();
         return;
       }
-    } else {
+    } else if (!inGrace) {
       GameState.holdCount = Math.max(0, GameState.holdCount - 1);
+    } else {
+      GameState.holdCount = 0;
     }
   }
 }
@@ -1958,9 +1980,8 @@ async function startLevel(index, opts = {}) {
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
   const level = LEVELS[index];
-  if (!levelNeedsFaceModel(level) && (faceLandmarker || faceInitPromise)) {
-    releaseFaceLandmarker();
-  }
+  // ポーズ専用レベルでも顔AIは保持（iOSで解放直後のポーズ読込失敗を防ぐ）
+  // 2人ポーズ(L14+)で numPoses 増加時のみポーズモデルを再読込
   if (!levelUsesPoseAtAll(level) && (poseLandmarker || poseInitPromise)) {
     releasePoseLandmarker();
   }
@@ -1979,12 +2000,18 @@ async function startLevel(index, opts = {}) {
   const ready = await ensureDetectorForLevel(level);
   if (!ready) {
     GameState.currentLevelIndex = prevIndex;
-    alert(`LEVEL ${level.id} の準備に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`);
+    const msg = levelNeedsPoseModel(level)
+      ? `LEVEL ${level.id} のポーズAI読込に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`
+      : `LEVEL ${level.id} の準備に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`;
+    alert(msg);
     return false;
   }
 
+  await warmUpNextLevelModel(index);
+
   schedulePosePreload(index);
 
+  levelStartedAt = Date.now();
   GameState.isRunning = true;
   GameState.animFrameId = requestAnimationFrame(detectionLoop);
   return true;

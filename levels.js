@@ -44,7 +44,7 @@ const LEVELS = [
     detector: "detectApologyBowFace",
     guide: "press-mic",
     shareText: "絶対に反省していない謝罪会見に成功しました。 #AIシルエットマッチ",
-    clearThreshold: 0.40, holdFrames: 14
+    clearThreshold: 0.58, holdFrames: 20
   },
   {
     id: 6, type: "face", players: 1,
@@ -338,9 +338,11 @@ const DETECTORS = {
     if (!forehead || !chin || !nose) return 0;
     const span = Math.max(chin.y - forehead.y, 0.04);
     const noseRatio = (nose.y - forehead.y) / span;
-    const headDown = clamp01((noseRatio - 0.42) * 3.0);
-    const chinUp = clamp01((chin.y - nose.y) / span * 2);
-    return blendScore(headDown, chinUp * 0.6);
+    // スマホ自撮り角度では反応しないよう、深いお辞儀のみ判定
+    if (noseRatio < 0.52) return 0;
+    const headDown = clamp01((noseRatio - 0.52) * 5.0);
+    const chinTuck = clamp01((chin.y - nose.y) / span * 2.5);
+    return minScore(headDown, chinTuck);
   },
 
   detectApologyBow({ face, pose }) {
