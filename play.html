@@ -1078,6 +1078,7 @@ let localAssetsAvailable = null;
 let wasmBaseCached = null;
 let detectFrameCounter = 0;
 let poseInitGeneration = 0;
+let faceInitGeneration = 0;
 
 function isInAppBrowser() {
   const ua = navigator.userAgent;
@@ -1503,23 +1504,29 @@ async function ensureFaceLandmarker() {
   if (faceLandmarker) return true;
   if (faceInitPromise) return faceInitPromise;
 
+  const gen = faceInitGeneration;
   faceInitPromise = (async () => {
     try {
       const vision = await getVisionTask();
       for (const delegate of getDelegates()) {
         try {
           setLoadingText(`顔認識モデル読込中 (${delegate})...`);
-          faceLandmarker = await loadFaceLandmarker(vision, delegate);
+          const landmarker = await loadFaceLandmarker(vision, delegate);
+          if (gen !== faceInitGeneration) {
+            try { landmarker.close(); } catch (e) { /* ignore */ }
+            return false;
+          }
+          faceLandmarker = landmarker;
           console.log(`[AI] FaceLandmarker 完了 (${delegate})`);
           return true;
         } catch (err) {
           console.warn(`[AI] FaceLandmarker ${delegate} 失敗:`, err);
-          faceLandmarker = null;
+          if (gen === faceInitGeneration) faceLandmarker = null;
         }
       }
       throw new Error("顔認識モデルの読み込みに失敗しました");
     } catch (err) {
-      faceInitPromise = null;
+      if (gen === faceInitGeneration) faceInitPromise = null;
       throw err;
     }
   })();
@@ -1580,6 +1587,15 @@ async function ensureDetectorForLevel(level) {
   showLoading(true);
   try {
     await checkLocalAssets();
+
+    if (isMobile() && level.type === "both") {
+      setLoadingText("AI準備中 (1/2)...");
+      await ensureFaceLandmarker();
+      setLoadingText("AI準備中 (2/2)...");
+      await ensurePoseLandmarkerForLevel(level);
+      return true;
+    }
+
     if (levelNeedsFaceModel(level)) await ensureFaceLandmarker();
     if (levelNeedsPoseModel(level)) {
       await ensurePoseLandmarkerForLevel(level);
@@ -1618,9 +1634,15 @@ function schedulePosePreload(currentIndex) {
   cancelPosePreload();
   if (poseLandmarker || poseInitPromise) return;
 
+  const curLevel = LEVELS[currentIndex];
   const nextLevel = LEVELS[currentIndex + 1];
   if (!nextLevel) return;
   if (!levelUsesPoseAtAll(nextLevel)) return;
+
+  // モバイル: 顔AI稼働中はポーズ先読みしない（メモリ不足防止）
+  if (isMobile() && levelNeedsFaceModel(curLevel)) {
+    return;
+  }
 
   const delay = isMobile() ? 2000 : 800;
 
@@ -1701,11 +1723,12 @@ async function resumeCamera() {
 }
 
 function releaseFaceLandmarker() {
+  faceInitGeneration++;
   if (faceLandmarker) {
     try { faceLandmarker.close(); } catch (e) { /* ignore */ }
     faceLandmarker = null;
-    faceInitPromise = null;
   }
+  faceInitPromise = null;
 }
 
 function releasePoseLandmarker() {
@@ -1843,38 +1866,41 @@ function runDetectionFrame() {
   const runPose = (needsPoseRequired || wantsPoseOptional) && poseLandmarker;
   const heavyDetect = needsFace && runPose;
 
+  let runDetectThisFrame = true;
   if (isMobile() && heavyDetect) {
     detectFrameCounter++;
-    if (detectFrameCounter % 2 !== 0) return;
+    runDetectThisFrame = detectFrameCounter % 2 === 0;
   }
 
-  if (needsFace && faceLandmarker) {
-    try {
-      lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
-      faceDetectErrors = 0;
-    } catch (err) {
-      console.warn("[AI] 顔検出失敗:", err);
-      lastFaceResult = null;
-      faceDetectErrors++;
-      if (faceDetectErrors >= 5) {
+  if (runDetectThisFrame) {
+    if (needsFace && faceLandmarker) {
+      try {
+        lastFaceResult = faceLandmarker.detectForVideo($video, timestamp);
         faceDetectErrors = 0;
-        releaseFaceLandmarker();
-        ensureFaceLandmarker().catch(() => {});
+      } catch (err) {
+        console.warn("[AI] 顔検出失敗:", err);
+        lastFaceResult = null;
+        faceDetectErrors++;
+        if (faceDetectErrors >= 5) {
+          faceDetectErrors = 0;
+          releaseFaceLandmarker();
+          ensureFaceLandmarker().catch(() => {});
+        }
       }
+    } else if (!needsFace) {
+      lastFaceResult = null;
     }
-  } else {
-    lastFaceResult = null;
-  }
 
-  if (runPose) {
-    try {
-      lastPoseResult = poseLandmarker.detectForVideo($video, timestamp);
-    } catch (err) {
-      console.warn("[AI] ポーズ検出失敗:", err);
+    if (runPose) {
+      try {
+        lastPoseResult = poseLandmarker.detectForVideo($video, timestamp);
+      } catch (err) {
+        console.warn("[AI] ポーズ検出失敗:", err);
+        lastPoseResult = null;
+      }
+    } else if (!wantsPoseOptional) {
       lastPoseResult = null;
     }
-  } else {
-    lastPoseResult = null;
   }
 
   const tracked = drawTrackedLevelFX(
@@ -1916,6 +1942,7 @@ function runDetectionFrame() {
 
 async function startLevel(index, opts = {}) {
   cancelPosePreload();
+  const prevIndex = GameState.currentLevelIndex;
   GameState.currentLevelIndex = index;
   GameState.holdCount         = 0;
   GameState.isCleared         = false;
@@ -1930,7 +1957,10 @@ async function startLevel(index, opts = {}) {
   resetFXSmoothing();
   ctx.clearRect(0, 0, $canvas.width, $canvas.height);
 
-  const level = currentLevel();
+  const level = LEVELS[index];
+  if (!levelNeedsFaceModel(level) && (faceLandmarker || faceInitPromise)) {
+    releaseFaceLandmarker();
+  }
   if (!levelUsesPoseAtAll(level) && (poseLandmarker || poseInitPromise)) {
     releasePoseLandmarker();
   }
@@ -1948,6 +1978,7 @@ async function startLevel(index, opts = {}) {
   setLoadingText(loadingMsg);
   const ready = await ensureDetectorForLevel(level);
   if (!ready) {
+    GameState.currentLevelIndex = prevIndex;
     alert(`LEVEL ${level.id} の準備に失敗しました。\nWi-Fi接続を確認し、Safariでページを再読み込みしてください。`);
     return false;
   }
